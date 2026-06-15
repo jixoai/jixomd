@@ -1,0 +1,16 @@
+# Binaries
+/jixomd
+*.exe
+
+# Test / build artifacts
+*.gen.md
+/coverage.out
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
