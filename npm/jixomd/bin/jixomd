@@ -1,0 +1,23 @@
+#!/usr/bin/env node
+'use strict';
+// Placeholder shim. Replaced by install.js with one that forwards to the
+// downloaded native binary. If install was skipped (JIXOMD_SKIP_DOWNLOAD),
+// this emits a helpful error.
+const { spawnSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const binDir = path.join(__dirname);
+const candidates = ['jixomd', 'jixomd.exe'];
+const override = process.env.JIXOMD_BINARY_PATH;
+if (override) {
+  const r = spawnSync(override, process.argv.slice(2), { stdio: 'inherit' });
+  process.exit(r.status || 0);
+}
+for (const c of candidates) {
+  const p = path.join(binDir, c);
+  if (fs.existsSync(p) && fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8').includes('"name"')) {
+    // The install.js shim overwrote this file; if we're here it wasn't overwritten.
+  }
+}
+process.stderr.write('[jixomd] native binary not installed. Run `npm install` again, or set JIXOMD_BINARY_PATH.\n');
+process.exit(1);

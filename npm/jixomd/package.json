@@ -1,0 +1,46 @@
+{
+  "name": "jixomd",
+  "version": "0.1.0",
+  "description": "A pure Markdown expansion engine — resolve [target](@FILE) directives into real content.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jixoai/jixomd"
+  },
+  "homepage": "https://github.com/jixoai/jixomd#readme",
+  "bugs": {
+    "url": "https://github.com/jixoai/jixomd/issues"
+  },
+  "keywords": [
+    "markdown",
+    "prompt-engineering",
+    "ai",
+    "llm",
+    "codegen",
+    "documentation",
+    "preprocessor"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "bin": {
+    "jixomd": "bin/jixomd"
+  },
+  "main": "index.js",
+  "files": [
+    "bin/",
+    "index.js",
+    "install.js",
+    "platform.js",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "optionalDependencies": {},
+  "jixomd": {
+    "owner": "jixoai",
+    "repo": "jixomd",
+    "_comment": "Used by install.js to locate GitHub releases. Override with JIXOMD_REPO."
+  }
+}

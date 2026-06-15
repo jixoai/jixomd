@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -count=1 ./...
+        env:
+          # Ensure git is configured for the BDD git feature tests.
+          GIT_AUTHOR_NAME: ci
+          GIT_AUTHOR_EMAIL: ci@ci
+          GIT_COMMITTER_NAME: ci
+          GIT_COMMITTER_EMAIL: ci@ci
