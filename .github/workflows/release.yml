@@ -12,12 +12,19 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # required for npm trusted publishing (provenance)
 
 jobs:
   # ── Cross-compile for 6 platforms and upload release assets ──
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - goos: darwin
@@ -49,11 +56,10 @@ jobs:
           fi
 
       - name: Build binary
-        shell: bash
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
+          CGO_ENABLED: "0"
         run: |
           mkdir -p dist
           BINARY_NAME=jixomd
@@ -62,8 +68,13 @@ jobs:
           fi
           go build -trimpath -ldflags="-s -w" -o "dist/$BINARY_NAME" ./cmd/jixomd
 
+      - name: Smoke-test the binary (native arch only)
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          chmod +x dist/jixomd
+          dist/jixomd --help > /dev/null && echo "smoke OK"
+
       - name: Package (tar.gz for unix, zip for windows)
-        shell: bash
         run: |
           VERSION=${{ steps.ver.outputs.version }}
           SLUG="${{ matrix.goos }}-${{ matrix.goarch }}"
@@ -73,29 +84,60 @@ jobs:
           else
             tar -czf "../jixomd_${VERSION}_${SLUG}.tar.gz" jixomd
           fi
+          cd ..
+          ls -lh jixomd_${VERSION}_${SLUG}.*
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: jixomd-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: jixomd_*.tar.gz
-          if-no-files-found: ignore
+          path: jixomd_*
+          if-no-files-found: error
           retention-days: 7
 
-      - name: Upload to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            jixomd_*.tar.gz
-            jixomd_*.zip
-          fail_on_unmatched_files: false
-
-  # ── Publish the npm wrapper package ──
-  publish-npm:
+  # ── Create the GitHub Release (BEFORE npm) and attach all assets ──
+  release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create release with assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: artifacts/*
+
+  # ── Publish the npm wrapper package AFTER the release exists ──
+  # The npm package version is RIGIDLY bound to the git tag: install.js builds
+  # its download URL as .../releases/download/v${pkg.version}/${asset}, so an
+  # npm@0.2.0 install always fetches the v0.2.0 binaries — never "latest".
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: npm-release   # trusted publishing environment (configured on npmjs.com)
     steps:
       - uses: actions/checkout@v4
 
@@ -104,8 +146,15 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Publish npm package
-        working-directory: npm/jixomd
+      - name: Set npm package version to the git tag (rigid binding)
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          cd npm/jixomd
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          echo "Publishing npm package version: $VERSION"
+          cat package.json | grep '"version"'
+
+      - name: Publish npm package (trusted publishing / provenance)
+        working-directory: npm/jixomd
+        run: npm publish --access public --provenance
