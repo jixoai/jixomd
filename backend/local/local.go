@@ -88,8 +88,10 @@ func (l *Local) Glob(pattern string, opts fsio.GlobOptions) ([]string, error) {
 	return matches, nil
 }
 
-// Git declines the git capability in the scaffold. TODO: go-git backend.
-func (l *Local) Git() (fsio.Git, error) { return nil, fsio.ErrUnsupported }
+// Git returns a go-git-backed Git capability. If Base is not inside a git
+// repository, returns ErrUnsupported so @GIT_* degrades to a comment.
+// Implemented in git.go.
+func (l *Local) Git() (fsio.Git, error) { return l.gitBackend() }
 
 // HTTP declines the http capability in the scaffold. TODO: net/http backend.
 func (l *Local) HTTP() (fsio.HTTP, error) { return nil, fsio.ErrUnsupported }
