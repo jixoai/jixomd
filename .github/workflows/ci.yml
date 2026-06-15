@@ -26,3 +26,24 @@ jobs:
           GIT_AUTHOR_EMAIL: ci@ci
           GIT_COMMITTER_NAME: ci
           GIT_COMMITTER_EMAIL: ci@ci
+
+  # Verify the npm package is publishable (no network calls, just packing).
+  npm-pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate npm package
+        working-directory: npm/jixomd
+        run: |
+          node --check install.js
+          node --check index.js
+          node --check platform.js
+          npm pack --dry-run
+
+      - name: Test install.js download/extract flow
+        run: node npm/test/install.test.js
