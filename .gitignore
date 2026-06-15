@@ -14,3 +14,15 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Build artifacts
+/dist/
+
+# npm: downloaded platform binaries (install.js writes these). The bin/jixomd
+# placeholder shim IS tracked (it's the CLI entry); install.js overwrites it
+# with a forwarder at install time.
+/npm/jixomd/bin/jixomd.exe
+/npm/jixomd/bin/jixomd-darwin-*
+/npm/jixomd/bin/jixomd-linux-*
+/npm/jixomd/bin/jixomd-windows-*
+/npm/jixomd/node_modules/

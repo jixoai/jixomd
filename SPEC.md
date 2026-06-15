@@ -1,23 +1,63 @@
 # jixomd SPEC
 
-> 状态:Draft v1 · 实现语言:Go · 定位:从 jixo2 `gen-prompt` 迁移而来的**独立** Markdown 扩展引擎
+> 状态:**v1 已实现全部 6 种 MODE**(见 §10)· 实现语言:Go · 从 jixo2 `gen-prompt` 迁移而来的**独立** Markdown 扩展引擎
 
 ---
 
-## 0. 目标与定位
+## 0. 愿景与定位
+
+### 0.1 它是什么
 
 jixomd 是一个**纯 Markdown 扩展引擎**:读入含指令的 Markdown,把指令(`[src/**](@FILE)`)就地展开为真实内容(文件、git diff 等),输出完整的 Markdown。
 
-- **独立**:可单独打包成一个二进制;也可只复用其中某个部件(parser、merger、local backend)。
-- **纯粹**:核心层零 IO,所有副作用经一个可注入的 `IO` 能力接口。等于「在写一个 wasm 包」——IO 边界显式定义。
-- **多种用法**:① 独立 CLI(`jixomd expand file.md`,基本替代 jixo2 的 `jixo G`,含 `--watch`);② 经 tool_call 被宿主(如 agent prompt 预处理)调用,把客户端内容拼接进服务端 prompt;③ 作为 Go 库被嵌入。
-- **不绑定任何具体宿主**。本文档不含 memoryai 等下游系统的内容。
+### 0.2 它解决什么问题
 
-### 设计原则(贯穿全文)
+Agent / LLM 的 prompt 经常需要「把项目里的真实内容拼进来」——文件源码、目录树、git diff。传统做法是让 AI 在运行时**动态调工具**去取(`read_mind` / `query_context` / …),每次 round-trip 一次。jixomd 把这件事**前置成声明式的 prompt 预处理**:作者在 Markdown 里写 `[src/**](@FILE)`,引擎在 prompt 进入处理队列前就把内容拼好。结果是「等价于 AI 自己调工具取了内容」,但零 round-trip、可缓存、可 diff。
 
-- **SRP**:core(纯变换) / resolve backend(IO) / cli(装配与 watch)三层职责单一。
+### 0.3 核心洞见:纯粹性来自架构切分,而非语言特性
+
+> 「纯粹」不是靠「在进程内用接口隔离 IO」实现的,而是靠「把解析(PARSE)和合并(MERGE)留在服务端、把执行(EXECUTION)整个赶到客户端」实现的。
+
+```
+┌─ 服务端(概念:Router / Expert 处理队列前的 prompt 预处理)──────────────┐
+│  ① DETECT:扫到 jixomd 语法 → ② DELEGATE:整份 md 或指令数组下发       │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               ▼  tool_call
+┌─ 客户端(jixomd 二进制,持有真实 repo)──────────────────────────────────┐
+│  ③ 完整引擎:PARSE → RESOLVE(读真 FS / git) → MERGE → FORMAT         │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               ▼  tool_call_result(回灌)
+┌─ 服务端 ───────────────────────────────────────────────────────────────┐
+│  ④ SPLICE / 替换 → 完整 prompt → Expert 开始处理                       │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+- 服务端**永远不碰**文件 / git / 网络——它只做字符串变换和编排。
+- 所有副作用都在客户端那个 `jixomd` 二进制里。
+- 这比「进程内用 `Io` 参数 threading」(Zig `std.Io` 的模型)是**更强的隔离**:物理拆成两个进程,边界是一份可序列化契约。
+- 因此**语言选 Go**(而非 Zig):纯粹性已由架构保证,不需要 `std.Io`;且唯一宿主生态是 Go(mindos 等),原生 import 零摩擦。
+
+### 0.4 三种用法,一份核心
+
+| 用法 | 形态 | 典型场景 |
+|---|---|---|
+| **独立 CLI** | `jixomd file.md`(doc 模式,raw) | 本地开发,替代 jixo2 的 `jixo G`;含 `--watch` |
+| **tool_call 集成** | `jixomd resolve`(batch JSON 数组) | agent pipeline:服务端 detect → delegate → 客户端 resolve → 回灌 splice |
+| **Go 库** | `import "jixomd/core"` | 嵌入任意 Go 程序,复用 parser / merger / core |
+
+三种用法共享**同一个 core**(纯函数 `Expand`)和同一套 START/END 标记。
+
+### 0.5 独立且不绑定宿主
+
+- 可单独打包成一个二进制;也可只复用其中某个部件(parser、merger、local backend)。
+- **不绑定任何具体宿主**。本文档不含 memoryai / mindos 等下游系统的内容——它们只是「换一个 `IO` backend」的特例(见 §2.2、§8 TODO)。
+
+### 0.6 设计原则(贯穿全文)
+
+- **SRP**:core(纯变换) / backend(IO) / cli(装配与 watch)三层职责单一。
 - **DIP**:core 依赖 `IO` 抽象,不依赖 `os`/`git`/`net` 具体实现。
 - **KISS / YAGNI**:对齐 jixo2 的**粗粒度**响应式(任意输入变更 → 全量重跑),不引入细粒度增量框架;`jixo:` 内置符号移除,改为 `@PLUGIN` 协议并推迟到 TODO。
+- **正则 → AST**:指令识别基于标准 Markdown AST(goldmark),而非正则——这是相对 jixo2 的根本正确性修复(代码块 / 注释里的 `[..](@..)` 不再误匹配)。
 
 ---
 
@@ -120,18 +160,22 @@ jixomd 是一个**纯 Markdown 扩展引擎**:读入含指令的 Markdown,把指
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ cli           expand / resolve / --watch                │
-│               (装配 + watch 循环 + fsnotify)            │
+│ cli           doc(默认裸命令)/ resolve / --watch       │
+│               (装配 + watch 循环 + fsnotify + 防抖)     │
 └───────────────────────┬─────────────────────────────────┘
                         ▼ 依赖
 ┌─────────────────────────────────────────────────────────┐
-│ resolve backend  local(os+go-git+doublestar)           │
-│                  (实现 IO 接口;watch 模式下兼做访问记录) │
-│                  [未来: wasm host-import / mindos VFS]   │
+│ backend  local(os + doublestar + gitignore)             │
+│          (实现 IO 接口;Git/HTTP 暂返回 ErrUnsupported)  │
+│          [未来: go-git / wasm host-import / mindos VFS]  │
 └───────────────────────┬─────────────────────────────────┘
                         ▼ 依赖
 ┌─────────────────────────────────────────────────────────┐
-│ core (纯)  Parse / Resolve-orchestration / Merge / Format│
+│ contract    Directive / Block + packed 编解码(纯)       │
+└───────────────────────┬─────────────────────────────────┘
+                        ▼ 依赖
+┌─────────────────────────────────────────────────────────┐
+│ core (纯)  Expand: Parse / Resolve / Merge / Format     │
 │            零 os·net·git·time.Now;依赖 IO 抽象           │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -181,12 +225,13 @@ type HTTP interface {
 ```
 
 - `IO.Glob` 的**全语义**(pattern 匹配 + 目录遍历 + gitignore)由 backend 实现;core 不自行遍历文件系统(保持纯)。
-- **watch 模式**下,backend 在实现 `IO` 的同时**记录每次访问**(Stat/ReadFile/Glob 的入参与扫描根),供 cli 的 watch 层注册监听(见 §5)。即 backend 一物两用:真 IO + 依赖采集。这与 jixo2 `reactive-fs` 记录读取的思路一致,但**采集逻辑在 backend 而非 core**——core 不感知 watch。
+- **watch 模式**(见 §5)当前为**粗粒度**:cli 递归监听整个 `BaseDir`,任意变更触发全量重跑(对齐 jixo2 `reactive-fs`)。**未来可选优化**:backend 在实现 `IO` 时记录每次访问(Stat/ReadFile/Glob 的入参与扫描根),供 watch 层缩小监听面——采集逻辑在 backend 而非 core,core 不感知 watch。当前未实现。
 
 ### 2.3 递归与收敛
 
 - `@INJECT` 一个 `.md` 文件、或 URL/资产返回含指令的内容时,**该内容被重新 PARSE** 并继续展开(服务端/客户端同此规则)。
-- core 驱动到**不动点**,受 `MaxDepth`(默认 8)保护;超限 → 该处输出 `<!-- jixomd: max depth exceeded -->`,不 panic。
+- **递归与去重在遍历层统一**(见 §10.2 的澄清):首次见到某 content id → 发全量块并继续递归;再次见到同一 id → 发 REF 且不再展开。这天然终止所有**确定性循环**(自递归、互递归 a→b→a)。
+- `MaxDepth`(默认 8)是**纯安全网**:仅当递归每次产生全新、未见过的内容时才可能触及——在无时间/状态的静态文件场景下不会发生。超限 → 该处输出 `<!-- jixomd: max depth exceeded -->`,不 panic。
 
 ### 2.4 能力缺失的降级
 
@@ -412,6 +457,8 @@ jixomd/
 3. **wasm 构建**:core + host-import backend(`IO` 由 wasm host 提供)。
 4. **mindos VFS backend**:用 `vfs.Stat/ReadDir/Open` 实现 `IO`;`Git()` 返回 `ErrUnsupported`(@GIT_* 降级)。
 5. **`@RUN` 指令**(注入终端命令输出,jixo2 提案):`[cmd](@RUN)`。
+6. **URL 注入(`IO.HTTP`)**:`[https://...](@FILE)` 当前返回 unsupported 注释;实现 `net/http` backend + `mime_<type>_lang` 映射。
+7. **`@FILE_TREE` 的 `expandDirectories` / 更完整的 glob 选项**:当前 `renderFileTree` 总是全展开;`expandDirectories=false` 时折叠目录为单节点。
 
 ---
 
@@ -444,8 +491,10 @@ jixomd/
 | `resolve.feature` | 5 | resolve:单条/批量数组、packed gzip/zstd 往返、坏 JSON 退出码 |
 | `dedup.feature` | 5 | 首次全量/重复 REF、`!` 强制全量、batch 跨条目 dedup、自递归/互递归终止 |
 | `watch.feature` | 2 | 文件变更触发重跑、突发变更防抖合并 |
+| `modes.feature` | 6 | FILE_LIST / FILE_TREE、lang / map_ext / prefix / noFound 塑形 |
+| `git.feature` | 3 | @GIT_FILE(工作区内容+状态)、@GIT_DIFF、未改动文件 |
 
-共 **15 场景**全绿 + core 单测。
+共 **24 场景**全绿 + core 单测。
 
 ### 10.2 递归与去重的统一(SPEC §2.3 / §3 的澄清)
 
@@ -482,9 +531,27 @@ jixomd/
 
 `resolve` 把整个 directive 数组**合成一份 Markdown**(用 `<!-- jixomd:BATCH:N:START/END -->` 哨兵包裹每条),跑**一次** `core.Expand`,再按哨兵切出每条 block。这样 dedup 作用域天然覆盖整个数组(跨条目),无需 core 暴露单独的 batch 入口。
 
-### 10.6 尚未实现(对应 §8 TODO,本期脚手架返回注释)
+### 10.6 已全部实现(本期)
 
-- `@FILE_TREE` / `@FILE_LIST` / `@GIT_FILE` / `@GIT_DIFF` → `<!-- jixomd: mode X not implemented -->`。
-- `@PLUGIN` 协议。
-- 细粒度增量 watch(当前为粗粒度全量重跑,对齐 jixo2)。
-- mindos VFS backend / wasm 构建。
+§1.2 的全部 6 种 MODE 已实现并通过 BDD 验证:
+
+| MODE | 实现 | backend |
+|---|---|---|
+| `@INJECT` | core(纯) | IO.ReadFile |
+| `@FILE` | core(纯,栅栏包裹) | IO.ReadFile |
+| `@FILE_LIST` | core(纯,路径逐行) | IO.Glob |
+| `@FILE_TREE` | core(纯,├──/└── 树形) | IO.Glob |
+| `@GIT_FILE` | core + IO.Git | go-git(working + commit) |
+| `@GIT_DIFF` | core + IO.Git(内置 unified diff) | go-git |
+
+§1.4 输出塑形 params 已实现:`lang` / `ext` / `map_ext_<ext>_lang` / `prefix` / `filepath` / `noFound[.msg/.prefix/.suffix]`。glob 控制 params 已实现:`gitignore` / `ignore` / `ignoreFiles` / `dot`。
+
+### 10.7 npm 分发(SPEC §0.4 第三种用法的生态扩展)
+
+二进制约 5–8MB(gzip 后 ~3MB),6 平台合计 ~17MB,超过 npm 包体积阈值(10MB)。故 npm 包采用 **GitHub Release 下载**策略:
+
+- `npm/jixomd/`:轻量 npm 包(package.json + install.js + platform.js + index.js)。
+- `postinstall`(`install.js`):按 `process.platform`/`process.arch` 从 GitHub Releases 下载对应 `jixomd_<version>_<slug>.tar.gz`,解压到 `bin/`,写入转发 shim。
+- 环境变量:`JIXOMD_SKIP_DOWNLOAD` / `JIXOMD_BINARY_PATH` / `JIXOMD_VERSION` / `JIXOMD_REPO` / `JIXOMD_MIRROR`(替换 github.com)/ `HTTPS_PROXY`/`HTTP_PROXY`(用 curl 下载)。
+- JS API:`expand(doc, opts)` / `expandFile(path, opts)` / `resolve(directives, opts)`。
+- GitHub Actions(`.github/workflows/release.yml`):tag `v*` 触发 6 矩阵交叉编译(CGO disabled、`-trimpath -ldflags="-s -w"`)+ 上传 Release 资产 + 发布 npm。

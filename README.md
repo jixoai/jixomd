@@ -122,9 +122,18 @@ JIXOMD_BDD_OFF=1 go test ./...    # skip BDD
 
 ## Status
 
-Implemented: `@FILE`, `@INJECT`, dedup/REF/`!`, doc + resolve + watch, packed transport (gzip/zstd), AST-based literal exemption.
+Implemented: all 6 modes (`@FILE`, `@INJECT`, `@FILE_LIST`, `@FILE_TREE`, `@GIT_FILE`, `@GIT_DIFF`), dedup/REF/`!`, doc + resolve + watch, packed transport (gzip/zstd), AST-based literal exemption, output shaping params (lang/ext/map_ext/prefix/filepath/noFound), npm package with GitHub-release binary distribution.
 
-TODO (see SPEC §8): `@FILE_TREE`/`@FILE_LIST`/`@GIT_FILE`/`@GIT_DIFF`, `@PLUGIN`, fine-grained incremental watch, mindos VFS backend, wasm build.
+TODO (see SPEC §8): `@PLUGIN`, fine-grained incremental watch, URL injection (`IO.HTTP`), mindos VFS backend, wasm build.
+
+## npm
+
+```bash
+npm install jixomd        # downloads the platform binary on install
+npx jixomd file.md
+```
+
+JS API: `expand(doc, opts)`, `expandFile(path, opts)`, `resolve(directives, opts)`. Supports `JIXOMD_MIRROR`, `HTTPS_PROXY`, `JIXOMD_BINARY_PATH` and other env vars — see [`npm/jixomd/README.md`](npm/jixomd/README.md).
 
 ## GOROOT note
 
@@ -251,9 +260,18 @@ JIXOMD_BDD_OFF=1 go test ./...    # 跳过 BDD
 
 ## 状态
 
-已实现:`@FILE`、`@INJECT`、dedup/REF/`!`、doc + resolve + watch、打包传输(gzip/zstd)、基于 AST 的字面豁免。
+已实现:全部 6 种 MODE(`@FILE`、`@INJECT`、`@FILE_LIST`、`@FILE_TREE`、`@GIT_FILE`、`@GIT_DIFF`)、dedup/REF/`!`、doc + resolve + watch、打包传输(gzip/zstd)、基于 AST 的字面豁免、输出塑形 params(lang/ext/map_ext/prefix/filepath/noFound)、npm 包(GitHub Release 二进制分发)。
 
-TODO(见 SPEC §8):`@FILE_TREE`/`@FILE_LIST`/`@GIT_FILE`/`@GIT_DIFF`、`@PLUGIN`、细粒度增量 watch、mindos VFS backend、wasm 构建。
+TODO(见 SPEC §8):`@PLUGIN`、细粒度增量 watch、URL 注入(`IO.HTTP`)、mindos VFS backend、wasm 构建。
+
+## npm
+
+```bash
+npm install jixomd        # 安装时自动下载对应平台二进制
+npx jixomd file.md
+```
+
+JS API:`expand(doc, opts)`、`expandFile(path, opts)`、`resolve(directives, opts)`。支持 `JIXOMD_MIRROR`、`HTTPS_PROXY`、`JIXOMD_BINARY_PATH` 等环境变量,详见 [`npm/jixomd/README.md`](npm/jixomd/README.md)。
 
 ## GOROOT 注意
 
