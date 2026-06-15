@@ -44,7 +44,6 @@ func (t *testCtx) reset() {
 
 // --- workspace fixtures ---
 
-// tableData returns the data rows of a godog table (skipping the header row).
 func tableData(table *godog.Table) []*messages.PickleTableRow {
 	if len(table.Rows) == 0 {
 		return nil
@@ -104,9 +103,9 @@ func (t *testCtx) runWithMaxDepth(cmd string, depth int) error {
 	return t.run(cmd + " --max-depth " + strconv.Itoa(depth))
 }
 
-// injectBase inserts `--base <workspace>` immediately after the (optional)
-// subcommand, BEFORE any positional path arg. Go's flag package stops parsing
-// flags at the first positional, so --base must precede it.
+// injectBase inserts --base <workspace> after the (optional) subcommand, before
+// any positional arg (Go's flag package stops parsing flags at the first
+// positional).
 func (t *testCtx) injectBase(args []string) []string {
 	out := append([]string{}, args...)
 	insertAt := 0
@@ -229,10 +228,36 @@ func (t *testCtx) iProvidePackedInputWith(algo string, table *godog.Table) error
 	return nil
 }
 
+// --- output-file polling (watch + general) ---
+
+func (t *testCtx) outputContainsWithinStep(dur, filename, want string) error {
+	d := 2 * time.Second
+	if dur != "" {
+		var err error
+		d, err = time.ParseDuration(dur)
+		if err != nil {
+			return err
+		}
+	}
+	return t.outputContainsWithin(d, filename, want)
+}
+
+func (t *testCtx) outputNotContainsWithinStep(dur, filename, want string) error {
+	d := 2 * time.Second
+	if dur != "" {
+		var err error
+		d, err = time.ParseDuration(dur)
+		if err != nil {
+			return err
+		}
+	}
+	return t.outputNotContainsWithin(d, filename, want)
+}
+
 // --- godog wiring ---
 
-// Step patterns. Written as double-quoted strings so backticks are just literal
-// chars (raw-string literals can't contain backticks; double-quoted ones can).
+// Step patterns as double-quoted strings (backticks are literal chars in
+// double-quoted strings; raw-string literals can't contain backticks).
 var (
 	stepIRun             = "^I run `([^`]+)`$"
 	stepIRunWithStdin    = "^I run `([^`]+)` with stdin \"([^\"]*)\"$"
@@ -277,35 +302,14 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(stepOverwriteTwice, t.overwriteTwice)
 	ctx.Step(stepOutContains, t.outputContainsWithinStep)
 	ctx.Step(stepOutNotContains, t.outputNotContainsWithinStep)
-}
 
-func (t *testCtx) outputContainsWithinStep(dur, filename, want string) error {
-	d := 2 * time.Second
-	if dur != "" {
-		var err error
-		d, err = time.ParseDuration(dur)
-		if err != nil {
-			return err
-		}
-	}
-	return t.outputContainsWithin(d, filename, want)
-}
-
-func (t *testCtx) outputNotContainsWithinStep(dur, filename, want string) error {
-	d := 2 * time.Second
-	if dur != "" {
-		var err error
-		d, err = time.ParseDuration(dur)
-		if err != nil {
-			return err
-		}
-	}
-	return t.outputNotContainsWithin(d, filename, want)
+	// Git-mode steps (SPEC §1.2 @GIT_FILE / @GIT_DIFF).
+	ctx.Step(`^a git repository initialized in the workspace with an initial commit$`, t.aGitRepositoryInitialized)
+	ctx.Step(`^a tracked file "([^"]+)" with content "([^"]+)" committed$`, t.aTrackedFileCommitted)
+	ctx.Step(`^the file "([^"]+)" is modified to "([^"]+)"$`, t.theFileIsModifiedTo)
 }
 
 // shellSplit is a minimal splitter for the command strings used in features.
-// It understands double-quoted segments; none of our cases need shell quoting
-// beyond that.
 func shellSplit(s string) []string {
 	var out []string
 	var cur strings.Builder
