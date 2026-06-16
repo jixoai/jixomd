@@ -53,13 +53,11 @@ func tableData(table *godog.Table) []*messages.PickleTableRow {
 
 func (t *testCtx) aWorkspaceWithFiles(table *godog.Table) error {
 	for _, row := range tableData(table) {
-		path := row.Cells[0].Value
-		content := row.Cells[1].Value
-		full := filepath.Join(t.workspace, path)
+		full := filepath.Join(t.workspace, row.Cells[0].Value)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(full, []byte(row.Cells[1].Value), 0o644); err != nil {
 			return err
 		}
 	}
@@ -104,8 +102,7 @@ func (t *testCtx) runWithMaxDepth(cmd string, depth int) error {
 }
 
 // injectBase inserts --base <workspace> after the (optional) subcommand, before
-// any positional arg (Go's flag package stops parsing flags at the first
-// positional).
+// any positional arg.
 func (t *testCtx) injectBase(args []string) []string {
 	out := append([]string{}, args...)
 	insertAt := 0
@@ -159,14 +156,12 @@ func (t *testCtx) stdoutValidJSONWithBlocks(table *godog.Table) error {
 		byID[b.ID] = b
 	}
 	for _, row := range tableData(table) {
-		id := row.Cells[0].Value
-		want := row.Cells[1].Value
-		b, ok := byID[id]
+		b, ok := byID[row.Cells[0].Value]
 		if !ok {
-			return fmt.Errorf("no block with id %q", id)
+			return fmt.Errorf("no block with id %q", row.Cells[0].Value)
 		}
-		if !strings.Contains(b.Block, want) {
-			return fmt.Errorf("block %q missing %q\n%s", id, want, b.Block)
+		if !strings.Contains(b.Block, row.Cells[1].Value) {
+			return fmt.Errorf("block %q missing %q\n%s", row.Cells[0].Value, row.Cells[1].Value, b.Block)
 		}
 	}
 	return nil
@@ -198,14 +193,12 @@ func (t *testCtx) stdoutPackedWithBlocks(algo string, table *godog.Table) error 
 		byID[b.ID] = b
 	}
 	for _, row := range tableData(table) {
-		id := row.Cells[0].Value
-		want := row.Cells[1].Value
-		b, ok := byID[id]
+		b, ok := byID[row.Cells[0].Value]
 		if !ok {
-			return fmt.Errorf("no block with id %q", id)
+			return fmt.Errorf("no block with id %q", row.Cells[0].Value)
 		}
-		if !strings.Contains(b.Block, want) {
-			return fmt.Errorf("block %q missing %q\n%s", id, want, b.Block)
+		if !strings.Contains(b.Block, row.Cells[1].Value) {
+			return fmt.Errorf("block %q missing %q\n%s", row.Cells[0].Value, row.Cells[1].Value, b.Block)
 		}
 	}
 	return nil
@@ -256,8 +249,7 @@ func (t *testCtx) outputNotContainsWithinStep(dur, filename, want string) error 
 
 // --- godog wiring ---
 
-// Step patterns as double-quoted strings (backticks are literal chars in
-// double-quoted strings; raw-string literals can't contain backticks).
+// Step patterns as double-quoted strings (backticks are literal in them).
 var (
 	stepIRun             = "^I run `([^`]+)`$"
 	stepIRunWithStdin    = "^I run `([^`]+)` with stdin \"([^\"]*)\"$"
@@ -284,6 +276,7 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(`^a workspace with files$`, t.aWorkspaceWithFiles)
 	ctx.Step(`^a document "([^"]+)" containing$`, t.aDocumentContaining)
 	ctx.Step(`^I provide on stdin$`, t.iProvideOnStdin)
+	ctx.Step(`^I provide on stdin "([^"]*)"$`, t.iProvideOnStdin)
 	ctx.Step(stepIRun, t.run)
 	ctx.Step(stepIRunWithStdin, t.runWithStdin)
 	ctx.Step(stepIRunWithMaxDepth, t.runWithMaxDepth)
