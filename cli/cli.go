@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/jixoai/jixomd/backend/local"
@@ -245,53 +244,28 @@ func runResolve(args []string, stdin io.Reader, out, errw io.Writer) int {
 }
 
 // resolveBatch resolves a directive array under ONE Expand dedup scope (SPEC
-// §4.3: dedup crosses entries). It synthesizes a doc containing all directives
-// separated by blank lines, runs a single core.Expand (so collapseDuplicates
-// sees every directive and dedups across them), then slices each directive's
-// expanded block out by sentinel markers.
-//
-// Each directive is wrapped between sentinel HTML comments that survive
-// expansion (they're HTML nodes, exempt from directive parsing). After Expand,
-// we split on the sentinels to recover per-directive blocks.
+// §4.3: dedup crosses entries). It calls core.ResolveDirectives directly —
+// passing the structured directives so Params (lang/prefix/glob-control) are
+// honored (issue 001) and the empty case returns [] not null (issue 002).
 func resolveBatch(reqs []contract.Directive, base string) ([]contract.Block, error) {
-	if len(reqs) == 0 {
-		return nil, nil
-	}
 	io := local.New(base)
-
-	// Build a synthetic doc: for each request, a sentinel-open line, the
-	// directive, then a sentinel-close line. Sentinels are HTML comments so
-	// they pass through Expand untouched and let us slice blocks afterward.
-	var b strings.Builder
+	dirs := make([]core.Directive, len(reqs))
 	for i, r := range reqs {
-		directive := fmt.Sprintf("[%s](@%s)", r.Target, r.Directive)
-		if r.Bang {
-			directive = fmt.Sprintf("[%s](@%s!)", r.Target, r.Directive)
+		dirs[i] = core.Directive{
+			ID:     r.ID,
+			Target: r.Target,
+			Mode:   r.Directive,
+			Bang:   r.Bang,
+			Params: r.Params,
 		}
-		fmt.Fprintf(&b, "<!-- jixomd:BATCH:%d:START -->\n", i)
-		b.WriteString(directive)
-		b.WriteString("\n<!-- jixomd:BATCH:")
-		b.WriteString(fmt.Sprintf("%d:END -->\n\n", i))
 	}
-
-	expanded, err := core.Expand(context.Background(), io, b.String(), core.Options{})
+	resolved, err := core.ResolveDirectives(context.Background(), io, dirs, core.Options{BaseDir: base})
 	if err != nil {
 		return nil, err
 	}
-
-	// Slice the expanded text by sentinel pairs.
-	blocks := make([]contract.Block, len(reqs))
-	for i := range reqs {
-		openTag := fmt.Sprintf("<!-- jixomd:BATCH:%d:START -->", i)
-		closeTag := fmt.Sprintf("<!-- jixomd:BATCH:%d:END -->", i)
-		start := strings.Index(expanded, openTag)
-		end := strings.Index(expanded, closeTag)
-		if start < 0 || end < 0 || end < start {
-			blocks[i] = contract.Block{ID: reqs[i].ID, Block: "<!-- jixomd: resolve error: block not found -->"}
-			continue
-		}
-		block := strings.TrimSpace(expanded[start+len(openTag) : end])
-		blocks[i] = contract.Block{ID: reqs[i].ID, Block: block}
+	blocks := make([]contract.Block, len(resolved))
+	for i, rb := range resolved {
+		blocks[i] = contract.Block{ID: rb.ID, Block: rb.Block}
 	}
 	return blocks, nil
 }

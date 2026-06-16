@@ -20,11 +20,80 @@ import (
 // Directive is a single request item: one [target](@MODE) the host wants
 // resolved. Mirrors a parsed directive without the source-span bookkeeping.
 type Directive struct {
-	ID        string              `json:"id"`
-	Target    string              `json:"target"`
-	Directive string              `json:"directive"` // mode, e.g. "FILE", "INJECT", "GIT_DIFF"
-	Bang      bool                `json:"bang,omitempty"`
-	Params    map[string][]string `json:"params,omitempty"`
+	ID        string        `json:"id"`
+	Target    string        `json:"target"`
+	Directive string        `json:"directive"` // mode, e.g. "FILE", "INJECT", "GIT_DIFF"
+	Bang      bool          `json:"bang,omitempty"`
+	Params    Params        `json:"params,omitempty"`
+}
+
+// Params is a flexible param map that accepts JSON values in any of these
+// shapes and normalizes to []string (matching the core's URL-query form):
+//   - {"lang": "python"}        → ["python"]
+//   - {"lang": ["py", "python"]} → ["py", "python"]
+//   - {"deep": 3}               → ["3"]
+//   - {"gitignore": true}       → ["true"]
+// This makes the wire contract ergonomic for JSON callers (issue 001 root cause).
+type Params map[string][]string
+
+// UnmarshalJSON accepts string, []string, number, or bool values.
+func (p *Params) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	out := Params{}
+	for k, v := range raw {
+		vals, err := normalizeParamValue(v)
+		if err != nil {
+			return fmt.Errorf("params.%s: %w", k, err)
+		}
+		out[k] = vals
+	}
+	*p = out
+	return nil
+}
+
+// normalizeParamValue turns a JSON raw value into []string.
+func normalizeParamValue(v json.RawMessage) ([]string, error) {
+	trimmed := bytes.TrimSpace(v)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	// Try string.
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return nil, err
+		}
+		return []string{s}, nil
+	}
+	// Try array of strings.
+	if trimmed[0] == '[' {
+		var arr []json.RawMessage
+		if err := json.Unmarshal(trimmed, &arr); err != nil {
+			return nil, err
+		}
+		out := make([]string, 0, len(arr))
+		for _, e := range arr {
+			vs, err := normalizeParamValue(e)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, vs...)
+		}
+		return out, nil
+	}
+	// bool or number: take the raw token as a string.
+	var s string
+	if err := json.Unmarshal(trimmed, &s); err == nil {
+		return []string{s}, nil
+	}
+	// Fallback: keep the raw token text.
+	return []string{string(trimmed)}, nil
 }
 
 // Block is a single response item: the fully formatted output (with
