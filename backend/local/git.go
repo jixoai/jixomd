@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -277,20 +278,17 @@ func (g *localGit) resolveRef(ref string) (plumbing.Hash, error) {
 	return plumbing.ZeroHash, fmt.Errorf("cannot resolve ref %q", ref)
 }
 
-// matchGlobs reports whether path matches any pattern (supports ** suffix).
+// matchGlobs reports whether path matches any glob pattern via doublestar
+// (issue 005: the ad-hoc matcher only handled exact paths, **, and /** suffix;
+// patterns like src/*.go silently failed). Now uses the same glob engine as
+// the filesystem Glob path.
 func matchGlobs(patterns []string, path string) bool {
 	for _, p := range patterns {
 		if p == "**" {
 			return true
 		}
-		if p == path {
+		if ok, _ := doublestar.Match(p, path); ok {
 			return true
-		}
-		if strings.HasSuffix(p, "/**") {
-			prefix := strings.TrimSuffix(p, "/**")
-			if strings.HasPrefix(path, prefix+"/") || path == prefix {
-				return true
-			}
 		}
 	}
 	return false

@@ -41,13 +41,24 @@ func (l *Local) ReadFile(path string) ([]byte, error) {
 	return os.ReadFile(l.abs(path))
 }
 
-// Glob matches a pattern (with '**') under Base, honoring gitignore. Minimal
-// for the scaffold: loads a single Base/.gitignore; nested gitignore files and
-// the full GlobOptions surface are TODO.
+// Glob matches a pattern (with '**') under Base, honoring gitignore and the
+// Ignore / IgnoreFiles options (issue 004).
 func (l *Local) Glob(pattern string, opts fsio.GlobOptions) ([]string, error) {
 	var ignores []*gitignore.GitIgnore
 	if opts.Gitignore {
 		if gi, err := gitignore.CompileIgnoreFile(filepath.Join(l.Base, ".gitignore")); err == nil {
+			ignores = append(ignores, gi)
+		}
+	}
+	// Custom ignore files (issue 004).
+	for _, f := range opts.IgnoreFiles {
+		if gi, err := gitignore.CompileIgnoreFile(filepath.Join(l.Base, f)); err == nil {
+			ignores = append(ignores, gi)
+		}
+	}
+	// Inline ignore patterns, compiled against Base (issue 004).
+	if len(opts.Ignore) > 0 {
+		if gi := gitignore.CompileIgnoreLines(opts.Ignore...); gi != nil {
 			ignores = append(ignores, gi)
 		}
 	}
