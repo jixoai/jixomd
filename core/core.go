@@ -33,6 +33,49 @@ type Options struct {
 	MaxDepth int
 }
 
+// Directive is the structured form of a resolve request, mirroring
+// contract.Directive without core depending on the wire/contract package. It
+// lets batch callers pass params directly — no markdown round-trip that would
+// drop them (issue 001).
+type Directive struct {
+	ID     string
+	Target string
+	Mode   string                // FILE, INJECT, FILE_LIST, FILE_TREE, GIT_FILE, GIT_DIFF
+	Bang   bool
+	Params map[string][]string
+}
+
+// ResolvedBlock is one directive's expanded output (with START/END markers).
+type ResolvedBlock struct {
+	ID    string
+	Block string
+}
+
+// ResolveDirectives resolves a batch of structured directives under ONE dedup
+// scope (SPEC §4.3: dedup crosses entries). Unlike the markdown-synthesizing
+// path, it preserves Params directly, so output-shaping and glob-control
+// params from the wire contract are honored (issue 001). Returns a non-nil
+// empty slice for empty input (issue 002).
+func ResolveDirectives(ctx context.Context, io fsio.IO, reqs []Directive, opts Options) ([]ResolvedBlock, error) {
+	maxDepth := opts.MaxDepth
+	if maxDepth <= 0 {
+		maxDepth = 8
+	}
+	dd := newDedup()
+	out := make([]ResolvedBlock, 0, len(reqs)) // non-nil even when empty (issue 002)
+	for _, r := range reqs {
+		d := &grammar.Directive{
+			Target: r.Target,
+			Mode:   r.Mode,
+			Bang:   r.Bang,
+			Params: r.Params,
+		}
+		block := resolveDirective(ctx, io, d, dd, maxDepth)
+		out = append(out, ResolvedBlock{ID: r.ID, Block: strings.TrimSpace(block)})
+	}
+	return out, nil
+}
+
 // dedup tracks which content ids have been emitted in the current Expand
 // scope. Scope = one Expand call (one document). SPEC §3.2.
 type dedup struct {
@@ -199,8 +242,15 @@ func resolveDirective(ctx context.Context, io fsio.IO, d *grammar.Directive, dd 
 			return noFoundBlock(d)
 		}
 		sort.Strings(paths)
-		id := stableID("FILE_LIST\x00" + d.Target)
-		return wrapFull(id, d.Target, renderFileList(paths, d.Params), false)
+		// Strong id: mode + target + params + resolved file set (issue 003).
+		// This makes two list/tree directives dedup only when they resolve to
+		// the same content, and never collapse when params differ.
+		id := listTreeID(d.Mode, d.Target, d.Params, paths)
+		if !d.Bang && dd.seen[id] {
+			return wrapREF(id, d.Target)
+		}
+		dd.seen[id] = true
+		return wrapFull(id, d.Target, renderFileList(paths, d.Params), d.Bang)
 	case "FILE_TREE":
 		paths, err := globPaths(io, d)
 		if err != nil {
@@ -210,8 +260,12 @@ func resolveDirective(ctx context.Context, io fsio.IO, d *grammar.Directive, dd 
 			return noFoundBlock(d)
 		}
 		sort.Strings(paths)
-		id := stableID("FILE_TREE\x00" + d.Target)
-		return wrapFull(id, d.Target, renderFileTree(paths, d.Params), false)
+		id := listTreeID(d.Mode, d.Target, d.Params, paths)
+		if !d.Bang && dd.seen[id] {
+			return wrapREF(id, d.Target)
+		}
+		dd.seen[id] = true
+		return wrapFull(id, d.Target, renderFileTree(paths, d.Params), d.Bang)
 	case "GIT_FILE", "GIT_DIFF":
 		return resolveGit(ctx, io, d, dd, maxDepth)
 	default:
@@ -379,20 +433,84 @@ func parseGitTarget(target string) (ref string, patterns []string) {
 	return ref, patterns
 }
 
-// matchAny reports whether path matches any of the patterns (glob).
+// matchAny reports whether path matches any of the patterns. Pure (no
+// doublestar dependency) so the core stays import-clean per SPEC §6. Handles
+// the common glob surface: literal paths, **, dir/** prefixes, and per-segment
+// * wildcards.
 func matchAny(patterns []string, path string) bool {
 	for _, pat := range patterns {
 		if pat == "**" {
 			return true
 		}
-		// simple containment or exact match; glob matching delegated to backend
-		// in production, but for the working-tree filter a suffix/prefix check
-		// suffices because ChangedFiles already returned real paths.
-		if pat == path || strings.HasPrefix(path, strings.TrimSuffix(pat, "/**")) || strings.HasSuffix(path, pat) {
+		if globMatch(pat, path) {
 			return true
 		}
 	}
 	return false
+}
+
+// globMatch is a minimal pure glob matcher supporting:
+//   - ** matches any number of path segments (including zero)
+//   - * matches any chars except '/'
+//   - ? matches a single non-'/' char
+//   - everything else is literal
+//
+// It splits on '/' so ** is "any segments" and * is "within a segment".
+func globMatch(pattern, path string) bool {
+	return globSegs(strings.Split(pattern, "/"), strings.Split(path, "/"))
+}
+
+func globSegs(pat, path []string) bool {
+	for len(pat) > 0 {
+		if pat[0] == "**" {
+			// ** consumes zero or more path segments.
+			if len(pat) == 1 {
+				return true // trailing ** matches everything left
+			}
+			for i := 0; i <= len(path); i++ {
+				if globSegs(pat[1:], path[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(path) == 0 {
+			return false
+		}
+		if !globSegment(pat[0], path[0]) {
+			return false
+		}
+		pat, path = pat[1:], path[1:]
+	}
+	return len(path) == 0
+}
+
+// globSegment matches a single path segment against a pattern segment, where
+// * matches any run of non-'/' chars and ? matches one. Implemented as a
+// classic backtracking wildcard matcher.
+func globSegment(pat, seg string) bool {
+	pi, si := 0, 0
+	starP, starS := -1, -1
+	for si < len(seg) {
+		if pi < len(pat) && (pat[pi] == '?' || pat[pi] == seg[si]) {
+			pi++
+			si++
+		} else if pi < len(pat) && pat[pi] == '*' {
+			starP = pi
+			starS = si
+			pi++
+		} else if starP >= 0 {
+			pi = starP + 1
+			starS++
+			si = starS
+		} else {
+			return false
+		}
+	}
+	for pi < len(pat) && pat[pi] == '*' {
+		pi++
+	}
+	return pi == len(pat)
 }
 
 // renderFileList emits one path per line.
@@ -662,6 +780,33 @@ func stableID(s string) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(s))
 	return fmt.Sprintf("%x", h.Sum32())
+}
+
+// listTreeID computes a strong content id for FILE_LIST / FILE_TREE so dedup is
+// correct (issue 003): the id incorporates the mode, target, normalized params,
+// and the resolved file set. Two directives dedup iff they produce the same
+// output; differing params (dot, prefix, …) or file sets keep distinct ids.
+func listTreeID(mode, target string, params map[string][]string, paths []string) string {
+	var b strings.Builder
+	b.WriteString(mode)
+	b.WriteByte('\x00')
+	b.WriteString(target)
+	b.WriteByte('\x00')
+	// Normalize params deterministically.
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(strings.Join(params[k], ","))
+		b.WriteByte(';')
+	}
+	b.WriteByte('\x00')
+	b.WriteString(strings.Join(paths, "\n"))
+	return stableID(b.String())
 }
 
 // stripFrontmatterBody removes a leading YAML frontmatter block (`---` fences`)
