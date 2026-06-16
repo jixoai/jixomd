@@ -32,6 +32,7 @@
     "index.js",
     "install.js",
     "platform.js",
+    "packed.js",
     "README.md"
   ],
   "scripts": {

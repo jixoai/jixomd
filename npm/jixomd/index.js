@@ -85,10 +85,26 @@ function resolve(directives, opts) {
   opts = opts || {};
   const args = ['resolve'];
   if (opts.baseDir) { args.push('--base', opts.baseDir); }
-  const input = JSON.stringify(directives);
+  if (opts.packed) {
+    args.push('--packed');
+    if (opts.algo) { args.push('--algo', opts.algo); }
+  }
+  // In packed mode the input/output is base64(<algo>(json)); use the contract
+  // codec so callers get the same wire format the CLI speaks (issue 006).
+  let input;
+  if (opts.packed) {
+    const { encodePacked } = require('./packed');
+    input = encodePacked(directives, opts.algo || 'gzip');
+  } else {
+    input = JSON.stringify(directives);
+  }
   const result = spawnSync(binaryPath(), args, { input, encoding: 'utf8' });
   if (result.status !== 0) {
     throw new Error(`jixomd resolve failed (exit ${result.status}): ${result.stderr || ''}`);
+  }
+  if (opts.packed) {
+    const { decodePacked } = require('./packed');
+    return decodePacked(result.stdout.trim(), opts.algo || 'gzip');
   }
   return JSON.parse(result.stdout.trim());
 }
