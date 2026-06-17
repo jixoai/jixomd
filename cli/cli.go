@@ -75,32 +75,29 @@ func runDoc(ctx context.Context, args []string, stdin io.Reader, out, errw io.Wr
 		return ExitUsage
 	}
 	if *watch {
-		if len(fs.Args()) == 0 || fs.Arg(0) == "-" {
-			fmt.Fprintln(errw, "jixomd: --watch requires a file path (not stdin)")
+		if len(fs.Args()) == 0 {
+			fmt.Fprintln(errw, "jixomd: --watch requires at least one file path or glob")
 			return ExitUsage
 		}
-		inputPath := fs.Arg(0)
-		// Resolve input path relative to --base if given.
-		if *baseFlag != "" && !filepath.IsAbs(inputPath) {
-			inputPath = filepath.Join(*baseFlag, inputPath)
+		// Resolve base dir: explicit --base, else cwd.
+		watchBase := *baseFlag
+		if watchBase == "" {
+			cwd, _ := filepath.Abs(".")
+			watchBase = cwd
 		}
-		// Default output goes next to the input (<input>.gen.md). When --output
-		// is a bare name, place it under the input's dir too (so tests using
-		// --base get the output in the workspace, not the real cwd).
-		outPath := *output
-		inputDir := filepath.Dir(inputPath)
-		if outPath == "" {
-			outPath = filepath.Join(inputDir, defaultOutputName(filepath.Base(inputPath)))
-		} else if !filepath.IsAbs(outPath) {
-			outPath = filepath.Join(inputDir, outPath)
+		// Expand globs, compute outputs, and exclude outputs from inputs
+		// (loop prevention: a .gen.md matched by the glob is not re-processed).
+		inputs := expandGlobInputs(fs.Args(), watchBase, *output)
+		if len(inputs) == 0 {
+			fmt.Fprintln(errw, "jixomd: no input files matched (after excluding outputs)")
+			return ExitUsage
 		}
 		opts := WatchOptions{
-			InputPath:  inputPath,
-			OutputPath: outPath,
-			BaseDir:    resolveBase(*baseFlag, inputDir),
-			MaxDepth:   *maxDepth,
-			Debounce:   *debounce,
-			Out:        errw,
+			Inputs:   inputs,
+			BaseDir:  watchBase,
+			MaxDepth: *maxDepth,
+			Debounce: *debounce,
+			Out:      errw,
 		}
 		// Use the caller's context (tests cancel it); in the real CLI, Run()
 		// passes context.Background() and SIGINT/SIGTERM are handled by the
