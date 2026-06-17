@@ -171,5 +171,32 @@ jobs:
       - name: Build TypeScript package (tsdown + tsc d.ts)
         run: cd npm/jixomd && pnpm run build
 
-      - name: Publish all packages (workspace:* auto-rewritten to version)
-        run: pnpm publish -r --access public --provenance --no-git-checks
+      - name: Rewrite workspace:* to real version in main package.json
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          cd npm/jixomd
+          sed -i.bak "s/\"workspace:\*\"/\"^${VERSION}\"/g" package.json
+          rm -f package.json.bak
+          echo "Rewritten optionalDependencies:"
+          node -e "console.log(JSON.stringify(require('./package.json').optionalDependencies, null, 2))"
+
+      - name: Publish all packages via npm publish --provenance (trusted publishing)
+        shell: bash
+        run: |
+          set -e
+          for pkgdir in npm/jixomd npm/jixomd-darwin-arm64 npm/jixomd-darwin-x64 \
+                        npm/jixomd-linux-arm64 npm/jixomd-linux-x64 \
+                        npm/jixomd-win-arm64 npm/jixomd-win-x64; do
+            name=$(node -e "console.log(require('./${pkgdir}/package.json').name)")
+            ver=$(node -e "console.log(require('./${pkgdir}/package.json').version)")
+            if node -e "process.exit(require('./${pkgdir}/package.json').private ? 0 : 1)"; then
+              echo "  $name: skipped (private)"
+              continue
+            fi
+            echo "  Publishing $name@$ver..."
+            (cd "$pkgdir" && npm publish --access public --provenance) || {
+              echo "  $name publish failed (may already exist), continuing..."
+            }
+          done

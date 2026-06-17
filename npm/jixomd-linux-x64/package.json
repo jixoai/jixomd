@@ -1,9 +1,15 @@
 {
   "name": "@jixo/md-linux-x64",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "jixomd binary for linux-x64",
   "license": "MIT",
-  "os": ["linux"],
-  "cpu": ["x64"],
-  "files": ["jixomd"]
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "jixomd"
+  ]
 }
