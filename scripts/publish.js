@@ -183,20 +183,19 @@ function main() {
       console.log(`  ${pkg.name}: skipped (private)`);
       continue;
     }
-    process.stdout.write(`  ${pkg.name}@${pkg.version}... `);
+    console.log(`[publish] ${pkg.name}@${pkg.version}...`);
     const npmArgs = ['publish', '--access', 'public'];
     if (distTag) npmArgs.push('--tag', distTag);
-    const r = spawnSync('npm', npmArgs, { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
+    // Use stdio: 'inherit' so npm's 2FA/OAuth OTP prompt can interact with
+    // the terminal directly. With 'pipe', the prompt is swallowed and npm
+    // hangs waiting for input that never arrives.
+    const r = spawnSync('npm', npmArgs, { cwd: dir, stdio: 'inherit' });
     if (r.status !== 0) {
-      console.error('FAIL');
-      console.error(r.stderr || r.stdout);
-      // If it's a "already published" error, continue; otherwise abort.
-      if (!/already present|cannot publish over/i.test(r.stderr + r.stdout)) {
-        process.exit(1);
-      }
-      console.log('  (already published, skipping)');
+      // Check if it's a "already published" error — those are non-fatal.
+      // We can't read stderr (inherit mode), so just warn and continue.
+      console.log(`  ⚠️  ${pkg.name} publish exited ${r.status} (may be already published or auth cancelled)`);
     } else {
-      console.log('published ✅');
+      console.log(`  ✅ ${pkg.name} published`);
     }
   }
   console.log('[publish] done.');
