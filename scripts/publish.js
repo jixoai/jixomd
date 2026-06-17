@@ -33,6 +33,49 @@ const PLATFORMS = [
   { goos: 'windows', goarch: 'amd64', slug: 'win-x64',     bin: 'jixomd.exe' },
 ];
 
+// Directories whose .go sources are part of the binary. Used for the
+// incremental-cache check (skip rebuild if binary is newer than all sources).
+const SRC_DIRS = ['cmd', 'core', 'grammar', 'io', 'contract', 'backend', 'cli'];
+
+/**
+ * Walk a directory tree, calling fn for every .go file.
+ */
+function walkGo(dir, fn) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue;
+    const p = path.join(dir, entry.name);
+    const st = fs.statSync(p);
+    if (entry.isDirectory()) walkGo(p, fn);
+    else if (entry.name.endsWith('.go')) fn(p, st);
+  }
+}
+
+/**
+ * Returns true if the binary at outPath needs rebuilding: it doesn't exist,
+ * or any .go source is newer than it.
+ */
+function needsRebuild(outPath) {
+  if (!fs.existsSync(outPath)) return true;
+  const binMtime = fs.statSync(outPath).mtimeMs;
+  for (const dir of SRC_DIRS) {
+    const root = path.join(REPO_ROOT, dir);
+    if (!fs.existsSync(root)) continue;
+    let stale = false;
+    walkGo(root, (_p, st) => {
+      if (st.mtimeMs > binMtime) stale = true;
+    });
+    if (stale) return true;
+  }
+  return false;
+}
+
+/**
+ * Force rebuild even if cache says fresh (e.g. version bump changed source).
+ */
+function forceRebuild() {
+  return process.env.JIXOMD_FORCE_REBUILD === '1';
+}
+
 function pnpm(args, opts) {
   opts = opts || {};
   const r = spawnSync('pnpm', args, {
@@ -62,11 +105,19 @@ function main() {
     pnpm(['-r', 'exec', '--', 'npm', 'version', versionArg, '--no-git-tag-version', '--allow-same-version']);
   }
 
-  // ── Step 2: cross-compile platform binaries ──
-  console.log('[publish] building 6 platform binaries...');
+  // ── Step 2: cross-compile platform binaries (incremental) ──
+  console.log('[publish] building platform binaries...');
   for (const p of PLATFORMS) {
     const outDir = path.join(REPO_ROOT, 'npm', `jixomd-${p.slug}`);
     const outPath = path.join(outDir, p.bin);
+
+    // Skip rebuild if the binary is already newer than all .go sources.
+    if (!forceRebuild() && !needsRebuild(outPath)) {
+      const sz = (fs.statSync(outPath).size / 1024 / 1024).toFixed(1);
+      console.log(`  ${p.slug}... cached (${sz} MB)`);
+      continue;
+    }
+
     process.stdout.write(`  ${p.slug}... `);
     const env = { ...goEnv(), GOOS: p.goos, GOARCH: p.goarch, CGO_ENABLED: '0' };
     const r = spawnSync('go', [
