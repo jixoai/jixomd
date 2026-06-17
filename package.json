@@ -6,6 +6,7 @@
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.js",
+    "publish": "node scripts/publish.js",
     "jixomd": "node scripts/run.js",
     "test": "node scripts/test.js",
     "vet": "go vet ./...",
