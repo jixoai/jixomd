@@ -1,6 +1,6 @@
 {
   "name": "jixomd",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A pure Markdown expansion engine — resolve [target](@FILE) directives into real content.",
   "license": "MIT",
   "repository": {
@@ -30,18 +30,16 @@
   "files": [
     "bin/",
     "index.js",
-    "install.js",
     "platform.js",
     "packed.js",
     "README.md"
   ],
-  "scripts": {
-    "postinstall": "node install.js"
-  },
-  "optionalDependencies": {},
-  "jixomd": {
-    "owner": "jixoai",
-    "repo": "jixomd",
-    "_comment": "Used by install.js to locate GitHub releases. Override with JIXOMD_REPO."
+  "optionalDependencies": {
+    "@jixo/md-darwin-arm64": "workspace:*",
+    "@jixo/md-darwin-x64": "workspace:*",
+    "@jixo/md-linux-arm64": "workspace:*",
+    "@jixo/md-linux-x64": "workspace:*",
+    "@jixo/md-win-arm64": "workspace:*",
+    "@jixo/md-win-x64": "workspace:*"
   }
 }

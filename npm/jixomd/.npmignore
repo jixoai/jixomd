@@ -1,3 +1,0 @@
-# Only ship what's needed; exclude nothing extra for now.
-# The package.json "files" field already whitelists bin/, index.js, install.js,
-# platform.js, README.md.

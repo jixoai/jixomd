@@ -2,7 +2,7 @@
 
 A **pure Markdown expansion engine**. Resolve `[target](@FILE)` directives into real content — for prompt engineering, codegen, and AI pipelines.
 
-This npm package wraps the native [jixomd](https://github.com/jixoai/jixomd) binary (Go). It downloads the correct platform binary at install time.
+This npm package wraps the native [jixomd](https://github.com/jixoai/jixomd) binary (Go). The correct platform binary is installed automatically via optional dependencies (`@jixo/md-{os}-{arch}`).
 
 ## Install
 
@@ -11,6 +11,8 @@ npm install jixomd
 # or
 npx jixomd file.md
 ```
+
+npm automatically installs the matching `@jixo/md-{os}-{arch}` platform package based on your OS and CPU — no download step, no postinstall script.
 
 ## CLI
 
@@ -44,26 +46,22 @@ const blocks = resolve([
 
 ## Environment variables
 
-The postinstall downloader respects:
-
 | Variable | Purpose |
 |---|---|
-| `JIXOMD_SKIP_DOWNLOAD` | Skip binary download (offline / dev) |
-| `JIXOMD_BINARY_PATH` | Use a locally-built binary at this path |
-| `JIXOMD_VERSION` | Pin a release version |
-| `JIXOMD_REPO` | Override `owner/repo` (e.g. a fork) |
-| `JIXOMD_MIRROR` | Base URL replacing `https://github.com` (for mirrors / proxies) |
-| `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` | Standard proxy env (download uses curl when set) |
+| `JIXOMD_BINARY_PATH` | Use a locally-built binary at this path (dev override) |
 
-### Behind a proxy / mirror
+## Platform packages
 
-```bash
-# Corporate proxy
-HTTPS_PROXY=http://corp-proxy:8080 npm install jixomd
+The native binaries are distributed as separate npm packages, pulled in as optional dependencies:
 
-# GitHub mirror (e.g. ghproxy)
-JIXOMD_MIRROR=https://ghproxy.com/https://github.com npm install jixomd
-```
+| Package | Platform |
+|---|---|
+| `@jixo/md-darwin-arm64` | macOS Apple Silicon |
+| `@jixo/md-darwin-x64` | macOS Intel |
+| `@jixo/md-linux-arm64` | Linux ARM64 |
+| `@jixo/md-linux-x64` | Linux x86-64 |
+| `@jixo/md-win-arm64` | Windows ARM64 |
+| `@jixo/md-win-x64` | Windows x86-64 |
 
 ## License
 

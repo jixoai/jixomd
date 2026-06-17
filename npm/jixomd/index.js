@@ -2,36 +2,54 @@
 
 // jixomd — JavaScript API.
 //
-// Spawns the native jixomd binary under the hood. The native binary is
-// downloaded at install time (see install.js); if it is missing (e.g. an
-// unsupported platform, or JIXOMD_SKIP_DOWNLOAD), calls will throw with a
-// helpful message.
+// Spawns the native jixomd binary under the hood. The binary is provided by a
+// per-platform optional dependency (@jixo/md-{os}-{arch}) installed alongside
+// this package. For local development, set JIXOMD_BINARY_PATH to point at a
+// locally-built Go binary.
 
 const { spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
+/**
+ * Resolve the native binary path.
+ *
+ * Resolution order:
+ *  1. JIXOMD_BINARY_PATH env (dev escape hatch)
+ *  2. require.resolve('@jixo/md-{slug}/{binary}') — the installed optional dep
+ *  3. ../jixomd-{slug}/{binary} — local pnpm workspace (dev)
+ */
 function binaryPath() {
-  // The postinstall script writes bin/jixomd (a shim) OR the platform binary.
-  // JIXOMD_BINARY_PATH overrides everything.
   const override = process.env.JIXOMD_BINARY_PATH;
   if (override) return override;
 
-  const binDir = path.join(__dirname, 'bin');
-  const shim = path.join(binDir, 'jixomd');
-  if (fs.existsSync(shim)) return shim;
-
-  // Fall back to a platform-named binary if the shim wasn't written.
   const { detect, binaryName } = require('./platform');
+  let slug, binName;
   try {
     const plat = detect();
-    const named = path.join(binDir, binaryName(plat.slug));
-    if (fs.existsSync(named)) return named;
-  } catch (_) {}
+    slug = plat.slug;
+    binName = binaryName(plat.slug);
+  } catch (_) {
+    throw new Error(
+      'jixomd: unsupported platform. Set JIXOMD_BINARY_PATH to a locally-built binary.'
+    );
+  }
+
+  // 2. Resolve via node_modules (installed optional dependency).
+  const pkgName = `@jixo/md-${slug}`;
+  try {
+    return require.resolve(`${pkgName}/${binName}`);
+  } catch (_) {
+    // Fall through to local workspace path.
+  }
+
+  // 3. Local workspace dev path (npm/jixomd-{slug}/jixomd).
+  const local = path.join(__dirname, '..', `jixomd-${slug}`, binName);
+  if (fs.existsSync(local)) return local;
 
   throw new Error(
-    'jixomd: native binary not found. Set JIXOMD_BINARY_PATH to a locally-built ' +
-    'binary, or re-run npm install.'
+    `jixomd: native binary not found for ${slug}. ` +
+    'Ensure the platform package installed correctly, or set JIXOMD_BINARY_PATH.'
   );
 }
 
@@ -89,8 +107,6 @@ function resolve(directives, opts) {
     args.push('--packed');
     if (opts.algo) { args.push('--algo', opts.algo); }
   }
-  // In packed mode the input/output is base64(<algo>(json)); use the contract
-  // codec so callers get the same wire format the CLI speaks (issue 006).
   let input;
   if (opts.packed) {
     const { encodePacked } = require('./packed');

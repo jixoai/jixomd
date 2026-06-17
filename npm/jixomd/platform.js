@@ -1,28 +1,24 @@
 'use strict';
 
-// Platform detection: maps process.platform / process.arch to the
-// {platform}-{arch} slug used in GitHub release asset names.
-//
-// Asset naming convention:
-//   jixomd_<version>_<platform>_<arch>.tar.gz
-//   jixomd_<version>_<platform>_<arch>.zip   (windows)
+// Platform detection: maps process.platform / process.arch to the slug used in
+// the optionalDependencies package names (@jixo/md-{slug}).
 
 const SUPPORTED = new Set([
   'darwin-arm64',
-  'darwin-amd64',
+  'darwin-x64',
   'linux-arm64',
-  'linux-amd64',
-  'windows-arm64',
-  'windows-amd64',
+  'linux-x64',
+  'win-arm64',
+  'win-x64',
 ]);
 
 function archMapping(nodeArch) {
   switch (nodeArch) {
     case 'arm64': return 'arm64';
-    case 'x64': return 'amd64';
+    case 'x64': return 'x64';
     case 'arm': return 'arm';
     case 'ia32':
-    case 'x32': return '386';
+    case 'x32': return 'ia32';
     default: return nodeArch;
   }
 }
@@ -31,7 +27,7 @@ function platformMapping(nodePlatform) {
   switch (nodePlatform) {
     case 'darwin': return 'darwin';
     case 'linux': return 'linux';
-    case 'win32': return 'windows';
+    case 'win32': return 'win';
     case 'freebsd': return 'freebsd';
     default: return nodePlatform;
   }
@@ -57,20 +53,10 @@ function detect(platform, arch) {
 }
 
 /**
- * The asset file name for a given version + slug.
- * Windows uses .zip, everything else .tar.gz.
- */
-function assetName(version, slug) {
-  const ext = slug.startsWith('windows-') ? 'zip' : 'tar.gz';
-  return `jixomd_${version}_${slug}.${ext}`;
-}
-
-/**
- * The binary name inside the archive (without extension for non-windows,
- * .exe for windows).
+ * The binary filename inside the platform package.
  */
 function binaryName(slug) {
-  return slug.startsWith('windows-') ? 'jixomd.exe' : 'jixomd';
+  return slug.startsWith('win-') ? 'jixomd.exe' : 'jixomd';
 }
 
-module.exports = { detect, assetName, binaryName, SUPPORTED };
+module.exports = { detect, binaryName, SUPPORTED };
