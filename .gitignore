@@ -1,6 +1,7 @@
 # Binaries
 /jixomd
 *.exe
+/bin/
 
 # Test / build artifacts
 *.gen.md
