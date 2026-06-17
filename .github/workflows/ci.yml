@@ -21,29 +21,42 @@ jobs:
       - name: go test
         run: go test -count=1 ./...
         env:
-          # Ensure git is configured for the BDD git feature tests.
           GIT_AUTHOR_NAME: ci
           GIT_AUTHOR_EMAIL: ci@ci
           GIT_COMMITTER_NAME: ci
           GIT_COMMITTER_EMAIL: ci@ci
 
-  # Verify the npm package is publishable (no network calls, just packing).
-  npm-pack:
+  # Validate the pnpm workspace + npm packages.
+  npm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Validate npm package
-        working-directory: npm/jixomd
+      - name: JS syntax check
         run: |
-          node --check install.js
-          node --check index.js
-          node --check platform.js
-          npm pack --dry-run
+          node --check npm/jixomd/index.js
+          node --check npm/jixomd/platform.js
+          node --check npm/jixomd/packed.js
 
-      - name: Test install.js download/extract flow
-        run: node npm/test/install.test.js
+      - name: pnpm install (workspace)
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Verify all 7 packages pack
+        run: pnpm -r pack --dry-run
+
+      - name: Build host binary for platform test
+        run: go build -o npm/jixomd-$(node -e "const{detect}=require('./npm/jixomd/platform.js');const d=detect();console.log(d.slug)")/jixomd ./cmd/jixomd
+
+      - name: Platform resolution test
+        run: node npm/test/resolve-platform.test.js
+
+      - name: Packed resolve test
+        run: node npm/test/resolve-packed.test.js

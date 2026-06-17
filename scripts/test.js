@@ -8,16 +8,16 @@
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { REPO_ROOT, go, goEnv } = require('./go-env');
+const { detect } = require('../npm/jixomd/platform.js');
 
-function runNode(script) {
-  const r = spawnSync('node', [script], { cwd: REPO_ROOT, stdio: 'inherit' });
+function runNode(script, env) {
+  const r = spawnSync('node', [script], { cwd: REPO_ROOT, env, stdio: 'inherit' });
   if (r.status !== 0) {
     throw new Error(`${script} exited with ${r.status}`);
   }
 }
 
 function main() {
-  // Go tests (vet + test), with git identity for the BDD git feature.
   const env = { ...goEnv() };
   if (!env.GIT_AUTHOR_NAME) {
     env.GIT_AUTHOR_NAME = 'jixomd-test';
@@ -33,23 +33,23 @@ function main() {
   r = spawnSync('go', ['test', '-count=1', './...'], { cwd: REPO_ROOT, env, stdio: 'inherit' });
   if (r.status !== 0) throw new Error('go test failed');
 
-  // npm package tests.
-  console.log('[test] npm/test/install.test.js');
-  runNode(path.join('npm', 'test', 'install.test.js'));
+  // Build the host binary into the matching platform package dir so
+  // binaryPath() resolves via the local workspace fallback.
+  const plat = detect();
+  const binName = plat.slug.startsWith('win-') ? 'jixomd.exe' : 'jixomd';
+  const pkgBinDir = path.join(REPO_ROOT, 'npm', `jixomd-${plat.slug}`);
+  const pkgBinPath = path.join(pkgBinDir, binName);
+  console.log(`[test] building host binary → npm/jixomd-${plat.slug}/${binName}`);
+  go(['build', '-o', pkgBinPath, './cmd/jixomd']);
 
-  // resolve-packed.test.js needs a binary; build it if missing.
-  const binPath = path.join(REPO_ROOT, 'bin', 'jixomd');
-  if (!require('fs').existsSync(binPath)) {
-    console.log('[test] building binary for resolve-packed test...');
-    go(['build', '-o', binPath, './cmd/jixomd']);
-  }
+  console.log('[test] npm/test/resolve-platform.test.js');
+  runNode(path.join('npm', 'test', 'resolve-platform.test.js'));
+
   console.log('[test] npm/test/resolve-packed.test.js');
-  // resolve-packed.test.js needs JIXOMD_BINARY_PATH pointing at a binary.
-  const env2 = { ...process.env, JIXOMD_BINARY_PATH: binPath };
-  const r2 = spawnSync('node', [path.join('npm', 'test', 'resolve-packed.test.js')], {
-    cwd: REPO_ROOT, env: env2, stdio: 'inherit',
+  runNode(path.join('npm', 'test', 'resolve-packed.test.js'), {
+    ...env,
+    JIXOMD_BINARY_PATH: pkgBinPath,
   });
-  if (r2.status !== 0) throw new Error('resolve-packed.test.js failed');
 
   console.log('[test] all green ✅');
 }

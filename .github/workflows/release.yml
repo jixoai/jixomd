@@ -12,33 +12,43 @@ on:
 
 permissions:
   contents: write
-  id-token: write   # required for npm trusted publishing (provenance)
+  id-token: write   # npm trusted publishing (provenance)
 
 jobs:
-  # ── Cross-compile for 6 platforms and upload release assets ──
+  # ── Cross-compile 6 platforms, each into its npm platform package dir ──
   build:
     runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
-    outputs:
-      version: ${{ steps.ver.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - goos: darwin
             goarch: arm64
+            slug: darwin-arm64
+            bin: jixomd
           - goos: darwin
             goarch: amd64
+            slug: darwin-x64
+            bin: jixomd
           - goos: linux
             goarch: arm64
+            slug: linux-arm64
+            bin: jixomd
           - goos: linux
             goarch: amd64
+            slug: linux-x64
+            bin: jixomd
           - goos: windows
             goarch: arm64
+            slug: win-arm64
+            bin: jixomd.exe
           - goos: windows
             goarch: amd64
+            slug: win-x64
+            bin: jixomd.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -46,115 +56,117 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Determine version
-        id: ver
-        run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build binary
+      - name: Build binary into platform package dir
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
-          mkdir -p dist
-          BINARY_NAME=jixomd
-          if [ "$GOOS" = "windows" ]; then
-            BINARY_NAME=jixomd.exe
-          fi
-          go build -trimpath -ldflags="-s -w" -o "dist/$BINARY_NAME" ./cmd/jixomd
+          OUT="npm/jixomd-${{ matrix.slug }}/${{ matrix.bin }}"
+          go build -trimpath -ldflags="-s -w" -o "$OUT" ./cmd/jixomd
+          ls -lh "$OUT"
 
       - name: Smoke-test the binary (native arch only)
-        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        if: matrix.slug == 'linux-x64'
         run: |
-          chmod +x dist/jixomd
-          dist/jixomd --help > /dev/null && echo "smoke OK"
+          chmod +x npm/jixomd-linux-x64/jixomd
+          npm/jixomd-linux-x64/jixomd --help > /dev/null && echo "smoke OK"
 
-      - name: Package (tar.gz for unix, zip for windows)
-        run: |
-          VERSION=${{ steps.ver.outputs.version }}
-          SLUG="${{ matrix.goos }}-${{ matrix.goarch }}"
-          cd dist
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip -q "../jixomd_${VERSION}_${SLUG}.zip" jixomd.exe
-          else
-            tar -czf "../jixomd_${VERSION}_${SLUG}.tar.gz" jixomd
-          fi
-          cd ..
-          ls -lh jixomd_${VERSION}_${SLUG}.*
-
-      - name: Upload artifact
+      - name: Upload platform package as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: jixomd-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: jixomd_*
-          if-no-files-found: error
-          retention-days: 7
+          name: pkg-${{ matrix.slug }}
+          path: npm/jixomd-${{ matrix.slug }}/
 
-  # ── Create the GitHub Release (BEFORE npm) and attach all assets ──
-  release:
+  # ── Create the GitHub Release (direct download fallback) ──
+  github-release:
     needs: build
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.ver.outputs.version }}
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
 
-      - name: Determine version
-        id: ver
-        run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Download all artifacts
+      - name: Download all platform artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true
 
-      - name: List artifacts
-        run: ls -lh artifacts/
+      - name: Package binaries for the release
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          for slug in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win-arm64 win-x64; do
+            dir="artifacts/pkg-${slug}"
+            if [ -f "${dir}/jixomd.exe" ]; then
+              (cd "$dir" && zip -q "../../jixomd_${VERSION}_${slug}.zip" jixomd.exe)
+            elif [ -f "${dir}/jixomd" ]; then
+              (cd "$dir" && tar -czf "../../jixomd_${VERSION}_${slug}.tar.gz" jixomd)
+            fi
+          done
+          ls -lh jixomd_${VERSION}_*
 
-      - name: Create release with assets
+      - name: Create GitHub Release with binary assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: artifacts/*
+          files: jixomd_*
 
-  # ── Publish the npm wrapper package AFTER the release exists ──
-  # The npm package version is RIGIDLY bound to the git tag: install.js builds
-  # its download URL as .../releases/download/v${pkg.version}/${asset}, so an
-  # npm@0.2.0 install always fetches the v0.2.0 binaries — never "latest".
+  # ── Publish all 7 npm packages via pnpm workspace ──
   publish-npm:
-    needs: release
+    needs: build
     runs-on: ubuntu-latest
-    environment: npm-release   # trusted publishing environment (configured on npmjs.com)
+    environment: npm-release   # trusted publishing environment
     steps:
       - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Set npm package version to the git tag (rigid binding)
-        env:
-          VERSION: ${{ needs.release.outputs.version }}
-        run: |
-          cd npm/jixomd
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
-          echo "Publishing npm package version: $VERSION"
-          cat package.json | grep '"version"'
+      # Restore the 6 built binaries into their platform package dirs.
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-      - name: Publish npm package (trusted publishing / provenance)
-        working-directory: npm/jixomd
-        run: npm publish --access public --provenance
+      - name: Place binaries into platform packages
+        shell: bash
+        run: |
+          for slug in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win-arm64 win-x64; do
+            src="artifacts/pkg-${slug}"
+            dest="npm/jixomd-${slug}"
+            if [ -f "${src}/jixomd.exe" ]; then
+              cp "${src}/jixomd.exe" "${dest}/jixomd.exe"
+            elif [ -f "${src}/jixomd" ]; then
+              cp "${src}/jixomd" "${dest}/jixomd"
+              chmod +x "${dest}/jixomd"
+            fi
+          done
+
+      - name: Determine version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set all workspace package versions
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: pnpm -r exec -- npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: pnpm install (link workspace)
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Publish all packages (workspace:* auto-rewritten to version)
+        run: pnpm publish -r --access public --provenance --no-git-checks

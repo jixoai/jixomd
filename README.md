@@ -129,11 +129,11 @@ TODO (see SPEC §8): `@PLUGIN`, fine-grained incremental watch, URL injection (`
 ## npm
 
 ```bash
-npm install jixomd        # downloads the platform binary on install
+npm install jixomd        # installs the matching platform binary via optionalDependencies
 npx jixomd file.md
 ```
 
-JS API: `expand(doc, opts)`, `expandFile(path, opts)`, `resolve(directives, opts)`. Supports `JIXOMD_MIRROR`, `HTTPS_PROXY`, `JIXOMD_BINARY_PATH` and other env vars — see [`npm/jixomd/README.md`](npm/jixomd/README.md).
+The platform binary (`@jixo/md-{os}-{arch}`) is installed automatically by npm — no download step, no postinstall. JS API: `expand(doc, opts)`, `expandFile(path, opts)`, `resolve(directives, opts)`. Set `JIXOMD_BINARY_PATH` to override with a locally-built binary. See [`npm/jixomd/README.md`](npm/jixomd/README.md).
 
 ## GOROOT note
 
@@ -267,11 +267,11 @@ TODO(见 SPEC §8):`@PLUGIN`、细粒度增量 watch、URL 注入(`IO.HTTP`)、m
 ## npm
 
 ```bash
-npm install jixomd        # 安装时自动下载对应平台二进制
+npm install jixomd        # 通过 optionalDependencies 自动安装对应平台二进制
 npx jixomd file.md
 ```
 
-JS API:`expand(doc, opts)`、`expandFile(path, opts)`、`resolve(directives, opts)`。支持 `JIXOMD_MIRROR`、`HTTPS_PROXY`、`JIXOMD_BINARY_PATH` 等环境变量,详见 [`npm/jixomd/README.md`](npm/jixomd/README.md)。
+平台二进制(`@jixo/md-{os}-{arch}`)由 npm 自动安装,无需下载步骤或 postinstall。JS API:`expand(doc, opts)`、`expandFile(path, opts)`、`resolve(directives, opts)`。可用 `JIXOMD_BINARY_PATH` 指定本地构建的二进制。详见 [`npm/jixomd/README.md`](npm/jixomd/README.md)。
 
 ## GOROOT 注意
 
