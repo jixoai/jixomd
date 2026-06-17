@@ -32,9 +32,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -49,11 +53,13 @@ jobs:
       - name: pnpm install (workspace)
         run: pnpm install --frozen-lockfile=false
 
-      - name: Verify all 7 packages pack
+      - name: Verify all packages pack
         run: pnpm -r pack --dry-run
 
       - name: Build host binary for platform test
-        run: go build -o npm/jixomd-$(node -e "const{detect}=require('./npm/jixomd/platform.js');const d=detect();console.log(d.slug)")/jixomd ./cmd/jixomd
+        run: |
+          SLUG=$(node -e "const{detect}=require('./npm/jixomd/platform.js');const d=detect();console.log(d.slug)")
+          go build -o "npm/jixomd-${SLUG}/jixomd" ./cmd/jixomd
 
       - name: Platform resolution test
         run: node npm/test/resolve-platform.test.js

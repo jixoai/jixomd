@@ -546,12 +546,12 @@ jixomd/
 
 §1.4 输出塑形 params 已实现:`lang` / `ext` / `map_ext_<ext>_lang` / `prefix` / `filepath` / `noFound[.msg/.prefix/.suffix]`。glob 控制 params 已实现:`gitignore` / `ignore` / `ignoreFiles` / `dot`。
 
-### 10.7 npm 分发(SPEC §0.4 第三种用法的生态扩展)
+### 10.7 npm 分发(optionalDependencies 模式)
 
-二进制约 5–8MB(gzip 后 ~3MB),6 平台合计 ~17MB,超过 npm 包体积阈值(10MB)。故 npm 包采用 **GitHub Release 下载**策略:
+npm 包采用 **per-platform optionalDependencies** 分发(esbuild / swc / @biomejs 同款模式):
 
-- `npm/jixomd/`:轻量 npm 包(package.json + install.js + platform.js + index.js)。
-- `postinstall`(`install.js`):按 `process.platform`/`process.arch` 从 GitHub Releases 下载对应 `jixomd_<version>_<slug>.tar.gz`,解压到 `bin/`,写入转发 shim。
-- 环境变量:`JIXOMD_SKIP_DOWNLOAD` / `JIXOMD_BINARY_PATH` / `JIXOMD_VERSION` / `JIXOMD_REPO` / `JIXOMD_MIRROR`(替换 github.com)/ `HTTPS_PROXY`/`HTTP_PROXY`(用 curl 下载)。
-- JS API:`expand(doc, opts)` / `expandFile(path, opts)` / `resolve(directives, opts)`。
-- GitHub Actions(`.github/workflows/release.yml`):tag `v*` 触发 6 矩阵交叉编译(CGO disabled、`-trimpath -ldflags="-s -w"`)+ 上传 Release 资产 + 发布 npm。
+- 主包 `jixomd`(unscoped):声明 6 个 `optionalDependencies`(`@jixo/md-{os}-{arch}`),npm 根据 `os`/`cpu` 字段自动只安装匹配平台的那一个。
+- 6 个平台子包:`@jixo/md-darwin-arm64`、`@jixo/md-darwin-x64`、`@jixo/md-linux-arm64`、`@jixo/md-linux-x64`、`@jixo/md-win-arm64`、`@jixo/md-win-x64`,各自含一个原生二进制。
+- pnpm workspace(`pnpm-workspace.yaml`)管理版本:子包间用 `workspace:*` 引用,`pnpm publish -r` 发布时自动重写为真实 semver。
+- `index.js` 的 `binaryPath()` 解析顺序:`JIXOMD_BINARY_PATH`(开发覆盖)→ `require.resolve('@jixo/md-{slug}/jixomd')`(已安装的 optionalDep)→ 本地 workspace fallback。
+- GitHub Actions(`release.yml`):tag `v*` 触发 6 矩阵交叉编译(CGO disabled、`-trimpath -ldflags="-s -w"`)→ 编译进各自 `npm/jixomd-{slug}/` 目录 → `pnpm publish -r` 一次发布全部 7 个包(provenance)。GitHub Release 同时创建,作为直接下载的 fallback。
