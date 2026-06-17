@@ -247,10 +247,10 @@ func resolveDirective(ctx context.Context, io fsio.IO, d *grammar.Directive, dd 
 		// the same content, and never collapse when params differ.
 		id := listTreeID(d.Mode, d.Target, d.Params, paths)
 		if !d.Bang && dd.seen[id] {
-			return wrapREF(id, d.Target)
+			return wrapREF(id, d.Mode, d.Target)
 		}
 		dd.seen[id] = true
-		return wrapFull(id, d.Target, renderFileList(paths, d.Params), d.Bang)
+		return wrapFull(id, d.Mode, d.Target, renderFileList(paths, d.Params), d.Bang)
 	case "FILE_TREE":
 		paths, err := globPaths(io, d)
 		if err != nil {
@@ -262,10 +262,10 @@ func resolveDirective(ctx context.Context, io fsio.IO, d *grammar.Directive, dd 
 		sort.Strings(paths)
 		id := listTreeID(d.Mode, d.Target, d.Params, paths)
 		if !d.Bang && dd.seen[id] {
-			return wrapREF(id, d.Target)
+			return wrapREF(id, d.Mode, d.Target)
 		}
 		dd.seen[id] = true
-		return wrapFull(id, d.Target, renderFileTree(paths, d.Params), d.Bang)
+		return wrapFull(id, d.Mode, d.Target, renderFileTree(paths, d.Params), d.Bang)
 	case "GIT_FILE", "GIT_DIFF":
 		return resolveGit(ctx, io, d, dd, maxDepth)
 	default:
@@ -356,7 +356,7 @@ func renderGitFile(ctx context.Context, io fsio.IO, mode string, f fsio.GitFile,
 	if bang {
 		dd.seen[id] = true
 	} else if dd.seen[id] {
-		return wrapREF(id, f.Path)
+		return wrapREF(id, mode, f.Path)
 	}
 	dd.seen[id] = true
 
@@ -401,7 +401,7 @@ func renderGitFile(ctx context.Context, io fsio.IO, mode string, f fsio.GitFile,
 		}
 		processed = fmt.Sprintf("`%s (%s)`\n\n%s%s\n%s\n%s\n", f.Path, status, fence, lang, content, fence)
 	}
-	return wrapFull(id, f.Path, processed, bang)
+	return wrapFull(id, mode, f.Path, processed, bang)
 }
 
 // parseGitTarget splits "ref:path1,path2" into (ref, []pattern). A bare glob
@@ -613,12 +613,12 @@ func renderFile(ctx context.Context, io fsio.IO, mode, path string, params map[s
 			processed = expandInjected(ctx, io, processed, nestedDD, maxDepth)
 		}
 		dd.seen[id] = true
-		return wrapFull(id, path, processed, true)
+		return wrapFull(id, mode, path, processed, true)
 	}
 
 	// Repeat (no `!`): emit REF, do not recurse. Terminates cycles.
 	if dd.seen[id] {
-		return wrapREF(id, path)
+		return wrapREF(id, mode, path)
 	}
 	dd.seen[id] = true
 
@@ -632,7 +632,7 @@ func renderFile(ctx context.Context, io fsio.IO, mode, path string, params map[s
 	if mode == "INJECT" {
 		processed = expandInjected(ctx, io, processed, dd, maxDepth)
 	}
-	return wrapFull(id, path, processed, false)
+	return wrapFull(id, mode, path, processed, false)
 }
 
 // expandInjected recursively expands directives inside injected content,
@@ -652,18 +652,20 @@ func expandInjected(ctx context.Context, io fsio.IO, content string, dd *dedup, 
 	return cur
 }
 
-// wrapFull emits the START/content/END form. SPEC §3.1.
-func wrapFull(id, path, content string, bang bool) string {
-	startLine := fmt.Sprintf("<!-- jixomd:START id=%s path=%q -->", id, path)
+// wrapFull emits the START/content/END form. SPEC §3.1. The START marker
+// includes the directive mode (e.g. FILE, INJECT) so the AI can see which
+// instruction produced this block.
+func wrapFull(id, mode, path, content string, bang bool) string {
+	startLine := fmt.Sprintf("<!-- jixomd:START id=%s mode=%s path=%q -->", id, mode, path)
 	if bang {
-		startLine = fmt.Sprintf("<!-- jixomd:START id=%s path=%q force=1 -->", id, path)
+		startLine = fmt.Sprintf("<!-- jixomd:START id=%s mode=%s path=%q force=1 -->", id, mode, path)
 	}
 	return startLine + "\n" + content + "\n<!-- jixomd:END id=" + id + " -->\n"
 }
 
 // wrapREF emits the self-closing START / REF / END form for a repeat. SPEC §3.1.
-func wrapREF(id, path string) string {
-	return fmt.Sprintf("<!-- jixomd:START id=%s path=%q /-->\n<!-- jixomd:REF -->\n<!-- jixomd:END id=%s -->\n", id, path, id)
+func wrapREF(id, mode, path string) string {
+	return fmt.Sprintf("<!-- jixomd:START id=%s mode=%s path=%q /-->\n<!-- jixomd:REF -->\n<!-- jixomd:END id=%s -->\n", id, mode, path, id)
 }
 
 // applyOutputShaping wraps content with a code fence for FILE mode and applies
