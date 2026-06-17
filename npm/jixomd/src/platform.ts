@@ -1,9 +1,7 @@
-'use strict';
-
 // Platform detection: maps process.platform / process.arch to the slug used in
 // the optionalDependencies package names (@jixo/md-{slug}).
 
-const SUPPORTED = new Set([
+export const SUPPORTED = new Set<string>([
   'darwin-arm64',
   'darwin-x64',
   'linux-arm64',
@@ -12,7 +10,7 @@ const SUPPORTED = new Set([
   'win-x64',
 ]);
 
-function archMapping(nodeArch) {
+function archMapping(nodeArch: string): string {
   switch (nodeArch) {
     case 'arm64': return 'arm64';
     case 'x64': return 'x64';
@@ -23,7 +21,7 @@ function archMapping(nodeArch) {
   }
 }
 
-function platformMapping(nodePlatform) {
+function platformMapping(nodePlatform: string): string {
   switch (nodePlatform) {
     case 'darwin': return 'darwin';
     case 'linux': return 'linux';
@@ -33,11 +31,16 @@ function platformMapping(nodePlatform) {
   }
 }
 
+export interface PlatformInfo {
+  platform: string;
+  arch: string;
+  slug: string;
+}
+
 /**
- * Returns the {platform, arch, slug} for the current or overridden process.
- * Throws if the combination is not in the supported set.
+ * Detect the current platform. Throws if unsupported.
  */
-function detect(platform, arch) {
+export function detect(platform?: string, arch?: string): PlatformInfo {
   platform = platform || process.platform;
   arch = arch || process.arch;
   const p = platformMapping(platform);
@@ -55,8 +58,6 @@ function detect(platform, arch) {
 /**
  * The binary filename inside the platform package.
  */
-function binaryName(slug) {
+export function binaryName(slug: string): string {
   return slug.startsWith('win-') ? 'jixomd.exe' : 'jixomd';
 }
-
-module.exports = { detect, binaryName, SUPPORTED };

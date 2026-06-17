@@ -168,5 +168,8 @@ jobs:
       - name: pnpm install (link workspace)
         run: pnpm install --frozen-lockfile=false
 
+      - name: Build TypeScript package (tsdown + tsc d.ts)
+        run: cd npm/jixomd && pnpm run build
+
       - name: Publish all packages (workspace:* auto-rewritten to version)
         run: pnpm publish -r --access public --provenance --no-git-checks

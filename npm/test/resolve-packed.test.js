@@ -4,7 +4,7 @@
 // Uses JIXOMD_BINARY_PATH to point at a locally-built binary.
 // Run with: node test/resolve-packed.test.js
 
-const { resolve } = require('../jixomd');
+const { resolve } = require('../jixomd/dist/index.js');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');

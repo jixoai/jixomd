@@ -8,7 +8,14 @@
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { REPO_ROOT, go, goEnv } = require('./go-env');
-const { detect } = require('../npm/jixomd/platform.js');
+
+// Inline platform detection (avoid depending on the TS-built dist/ at this
+// stage — the test script runs BEFORE the TS build).
+function hostSlug() {
+  const p = process.platform === 'win32' ? 'win' : process.platform;
+  const a = process.arch === 'x64' ? 'x64' : process.arch;
+  return `${p}-${a}`;
+}
 
 function runNode(script, env) {
   const r = spawnSync('node', [script], { cwd: REPO_ROOT, env, stdio: 'inherit' });
@@ -35,12 +42,18 @@ function main() {
 
   // Build the host binary into the matching platform package dir so
   // binaryPath() resolves via the local workspace fallback.
-  const plat = detect();
-  const binName = plat.slug.startsWith('win-') ? 'jixomd.exe' : 'jixomd';
-  const pkgBinDir = path.join(REPO_ROOT, 'npm', `jixomd-${plat.slug}`);
+  const slug = hostSlug();
+  const binName = slug.startsWith('win-') ? 'jixomd.exe' : 'jixomd';
+  const pkgBinDir = path.join(REPO_ROOT, 'npm', `jixomd-${slug}`);
   const pkgBinPath = path.join(pkgBinDir, binName);
-  console.log(`[test] building host binary → npm/jixomd-${plat.slug}/${binName}`);
+  console.log(`[test] building host binary → npm/jixomd-${slug}/${binName}`);
   go(['build', '-o', pkgBinPath, './cmd/jixomd']);
+
+  // Build the TypeScript SDK package (tsdown + tsc d.ts).
+  console.log('[test] building npm/jixomd (tsdown + tsc)');
+  const npmDir = path.join(REPO_ROOT, 'npm', 'jixomd');
+  let bn = spawnSync('pnpm', ['run', 'build'], { cwd: npmDir, stdio: 'inherit' });
+  if (bn.status !== 0) throw new Error('npm/jixomd build failed');
 
   console.log('[test] npm/test/resolve-platform.test.js');
   runNode(path.join('npm', 'test', 'resolve-platform.test.js'));

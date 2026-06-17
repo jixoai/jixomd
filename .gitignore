@@ -24,6 +24,10 @@ Thumbs.db
 /npm/jixomd-*/jixomd
 /npm/jixomd-*/jixomd.exe
 
+# npm/jixomd: TypeScript build output (tsdown + tsc)
+/npm/jixomd/dist/
+
 # pnpm / node_modules
 node_modules/
 
+.tmp/

@@ -5,7 +5,7 @@
 // binary is built into npm/jixomd-{slug}/jixomd before this test runs.
 // Run with: node test/resolve-platform.test.js
 
-const { binaryPath } = require('../jixomd');
+const { binaryPath } = require('../jixomd/dist/index.js');
 const fs = require('fs');
 
 function main() {
