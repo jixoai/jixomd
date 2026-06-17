@@ -76,6 +76,20 @@ function forceRebuild() {
   return process.env.JIXOMD_FORCE_REBUILD === '1';
 }
 
+/**
+ * List all workspace package directories (main + 6 platform packages),
+ * using pnpm's workspace resolution. Returns absolute paths.
+ */
+function listWorkspacePackages() {
+  const dirs = [
+    path.join(REPO_ROOT, 'npm', 'jixomd'),
+  ];
+  for (const p of PLATFORMS) {
+    dirs.push(path.join(REPO_ROOT, 'npm', `jixomd-${p.slug}`));
+  }
+  return dirs.filter(d => fs.existsSync(path.join(d, 'package.json')));
+}
+
 function pnpm(args, opts) {
   opts = opts || {};
   const r = spawnSync('pnpm', args, {
@@ -137,22 +151,55 @@ function main() {
   console.log('[publish] building TypeScript SDK (tsdown + tsc)...');
   pnpm(['run', 'build'], { cwd: path.join(REPO_ROOT, 'npm', 'jixomd') });
 
-  // ── Step 4: verify ──
-  console.log('[publish] verifying packages pack...');
+  // ── Step 4: verify (dry-run exits here) ──
   if (dryRun) {
-    pnpm(['-r', 'pack', '--dry-run']);
+    console.log('[publish] dry-run: verifying packages pack...');
+    // Use npm pack --dry-run per package (pnpm's -r pack has version issues).
+    const pkgDirs = listWorkspacePackages();
+    for (const dir of pkgDirs) {
+      const name = require(path.join(dir, 'package.json')).name;
+      const r = spawnSync('npm', ['pack', '--dry-run'], { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
+      const ok = r.status === 0;
+      console.log(`  ${name}: ${ok ? 'pack OK' : 'pack FAIL'}`);
+      if (!ok) { console.error(r.stderr); process.exit(1); }
+    }
     console.log('[publish] dry-run complete — no packages published.');
     return;
   }
 
-  // ── Step 5: publish ──
-  console.log('[publish] publishing workspace...');
-  const publishArgs = ['-r', 'publish', '--access', 'public', '--no-git-checks'];
-  if (distTag) {
-    publishArgs.push('--tag', distTag);
+  // ── Step 5: publish each package via npm publish ──
+  // We use `npm publish` (not `pnpm publish`) because:
+  //  - npm reads the auth token from ~/.npmrc reliably
+  //  - pnpm publish can trigger a web-OAuth QR-code flow that hangs in some
+  //    setups, especially with 2FA or scoped packages.
+  //  - workspace:* is already rewritten by the version-bump step; npm publish
+  //    reads package.json as-is.
+  console.log('[publish] publishing workspace packages...');
+  const pkgDirs = listWorkspacePackages();
+  for (const dir of pkgDirs) {
+    const pkg = require(path.join(dir, 'package.json'));
+    // Skip the private root package.
+    if (pkg.private) {
+      console.log(`  ${pkg.name}: skipped (private)`);
+      continue;
+    }
+    process.stdout.write(`  ${pkg.name}@${pkg.version}... `);
+    const npmArgs = ['publish', '--access', 'public'];
+    if (distTag) npmArgs.push('--tag', distTag);
+    const r = spawnSync('npm', npmArgs, { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
+    if (r.status !== 0) {
+      console.error('FAIL');
+      console.error(r.stderr || r.stdout);
+      // If it's a "already published" error, continue; otherwise abort.
+      if (!/already present|cannot publish over/i.test(r.stderr + r.stdout)) {
+        process.exit(1);
+      }
+      console.log('  (already published, skipping)');
+    } else {
+      console.log('published ✅');
+    }
   }
-  pnpm(publishArgs);
-  console.log('[publish] done ✅');
+  console.log('[publish] done.');
 }
 
 main();
