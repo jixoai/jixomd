@@ -1,0 +1,42 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  npm/jixomd:
+    optionalDependencies:
+      '@jixo/md-darwin-arm64':
+        specifier: workspace:*
+        version: link:../jixomd-darwin-arm64
+      '@jixo/md-darwin-x64':
+        specifier: workspace:*
+        version: link:../jixomd-darwin-x64
+      '@jixo/md-linux-arm64':
+        specifier: workspace:*
+        version: link:../jixomd-linux-arm64
+      '@jixo/md-linux-x64':
+        specifier: workspace:*
+        version: link:../jixomd-linux-x64
+      '@jixo/md-win-arm64':
+        specifier: workspace:*
+        version: link:../jixomd-win-arm64
+      '@jixo/md-win-x64':
+        specifier: workspace:*
+        version: link:../jixomd-win-x64
+
+  npm/jixomd-darwin-arm64: {}
+
+  npm/jixomd-darwin-x64: {}
+
+  npm/jixomd-linux-arm64: {}
+
+  npm/jixomd-linux-x64: {}
+
+  npm/jixomd-win-arm64: {}
+
+  npm/jixomd-win-x64: {}

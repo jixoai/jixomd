@@ -1,0 +1,9 @@
+{
+  "name": "@jixo/md-linux-arm64",
+  "version": "0.1.1",
+  "description": "jixomd binary for linux-arm64",
+  "license": "MIT",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["jixomd"]
+}
