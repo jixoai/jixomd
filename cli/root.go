@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fatih/color"
@@ -108,8 +109,33 @@ remote tool calls over size-limited channels.`,
 	expandCmd.Flags().Duration("watch-debounce", 200*time.Millisecond, "debounce window for --watch")
 	root.AddCommand(expandCmd)
 
-	// Customize help template with color.
+	// Skill subcommand (read embedded skill docs).
+	root.AddCommand(newSkillCmd(out, errw))
+
+	// MCP subcommand (start MCP server).
+	root.AddCommand(newMCPCmd(stdin, out, errw))
+
+	// Customize help template with color + @MODE support.
 	customizeHelp(root)
+
+	// Override the help command to handle `jixomd help @FILE` / `@MODES`.
+	root.SetHelpCommand(&cobra.Command{
+		Use:   "help [command|@MODE]",
+		Short: "Help about any command or directive mode",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if modeHelpHandled(out, args) {
+				return nil
+			}
+			// Default: delegate to standard Cobra help.
+			if len(args) > 0 {
+				target, _, e := root.Find(args)
+				if e == nil && target != nil {
+					return target.Help()
+				}
+			}
+			return root.Help()
+		},
+	})
 
 	app.cmd = root
 	return app
@@ -221,7 +247,8 @@ func writeDocOutput(output, doc string, out io.Writer) error {
 	return nil
 }
 
-// customizeHelp applies colored output to Cobra's help template.
+// customizeHelp applies colored output to Cobra's help template and adds a
+// Modes section to the root command's help.
 func customizeHelp(cmd *cobra.Command) {
 	// fatih/color auto-disables when stdout is not a TTY.
 	bold := color.New(color.Bold).SprintFunc()
@@ -242,8 +269,33 @@ Usage:
 {{end}}{{if .HasAvailableLocalFlags}}Flags:
 {{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}
 {{if .HasAvailableSubCommands}}
-Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
+Use "{{.CommandPath}} [command] --help" for more information about a command.
+Use "{{.CommandPath}} help @FILE" for help on a specific directive mode.{{end}}
 `)
+}
+
+// modeHelpHandler processes `jixomd help @FILE` etc.
+// Returns true if the arg was a mode help request (and was handled).
+func modeHelpHandled(out io.Writer, args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	arg := args[0]
+	upper := strings.ToUpper(strings.TrimPrefix(arg, "@"))
+	if upper == "MODES" {
+		printAllModes(out)
+		return true
+	}
+	if strings.HasPrefix(arg, "@") {
+		if printModeHelp(out, upper) {
+			return true
+		}
+		// Unknown mode — print all modes as a hint.
+		fmt.Fprintf(out, "Unknown mode: @%s\n\n", upper)
+		printAllModes(out)
+		return true
+	}
+	return false
 }
 
 // resolveBase picks the base dir: explicit flag, else cwd.
