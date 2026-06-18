@@ -1,6 +1,6 @@
 {
   "name": "@jixo/md-win-x64",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "jixomd binary for win32-x64",
   "license": "MIT",
   "os": [
@@ -11,5 +11,14 @@
   ],
   "files": [
     "jixomd.exe"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jixoai/jixomd",
+    "directory": "npm/jixomd-win-x64"
+  },
+  "homepage": "https://github.com/jixoai/jixomd#readme",
+  "bugs": {
+    "url": "https://github.com/jixoai/jixomd/issues"
+  }
 }

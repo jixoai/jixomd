@@ -1,6 +1,6 @@
 {
   "name": "@jixo/md-linux-arm64",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "jixomd binary for linux-arm64",
   "license": "MIT",
   "os": [
@@ -11,5 +11,14 @@
   ],
   "files": [
     "jixomd"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jixoai/jixomd",
+    "directory": "npm/jixomd-linux-arm64"
+  },
+  "homepage": "https://github.com/jixoai/jixomd#readme",
+  "bugs": {
+    "url": "https://github.com/jixoai/jixomd/issues"
+  }
 }
