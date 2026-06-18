@@ -125,10 +125,13 @@ jobs:
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Install npm >=11.10 (trusted publishing support)
+        run: npm install -g 'npm@^11.10.0'
 
       # Restore the 6 built binaries into their platform package dirs.
       - name: Download all platform artifacts
