@@ -9,6 +9,8 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,10 +26,16 @@ import (
 
 // Options configures Expand.
 type Options struct {
-	// BaseDir is the root for relative path resolution (also the default watch
-	// root in the CLI). Passed to the backend via convention; core itself only
-	// treats it as opaque context.
+	// BaseDir is the project root / cwd — what `pwd:` targets and `$PWD`
+	// expand to. Also the default watch root in the CLI. Path resolution rules
+	// are documented in SPEC (§ Path resolution).
 	BaseDir string
+	// DocDir is the directory of the source document. Relative directive
+	// targets resolve against DocDir by default (document-relative, matching
+	// Markdown/HTML convention), so a `.md` file is portable across cwds. When
+	// empty, relative targets fall back to BaseDir. Use `pwd:` or `$PWD` to
+	// force BaseDir-relative resolution explicitly.
+	DocDir string
 	// MaxDepth bounds recursive injection (directive content that itself
 	// contains directives). Defaults to 8. See SPEC §2.3.
 	MaxDepth int
@@ -40,7 +48,7 @@ type Options struct {
 type Directive struct {
 	ID     string
 	Target string
-	Mode   string                // FILE, INJECT, FILE_LIST, FILE_TREE, GIT_FILE, GIT_DIFF
+	Mode   string // FILE, INJECT, FILE_LIST, FILE_TREE, GIT_FILE, GIT_DIFF
 	Bang   bool
 	Params map[string][]string
 }
@@ -61,6 +69,10 @@ func ResolveDirectives(ctx context.Context, io fsio.IO, reqs []Directive, opts O
 	if maxDepth <= 0 {
 		maxDepth = 8
 	}
+	ro := resolveOpts{baseDir: opts.BaseDir, docDir: opts.DocDir}
+	if ro.docDir == "" {
+		ro.docDir = opts.BaseDir
+	}
 	dd := newDedup()
 	out := make([]ResolvedBlock, 0, len(reqs)) // non-nil even when empty (issue 002)
 	for _, r := range reqs {
@@ -70,7 +82,7 @@ func ResolveDirectives(ctx context.Context, io fsio.IO, reqs []Directive, opts O
 			Bang:   r.Bang,
 			Params: r.Params,
 		}
-		block := resolveDirective(ctx, io, d, dd, maxDepth)
+		block := resolveDirective(ctx, io, d, dd, maxDepth, ro)
 		out = append(out, ResolvedBlock{ID: r.ID, Block: strings.TrimSpace(block)})
 	}
 	return out, nil
@@ -83,6 +95,15 @@ type dedup struct {
 }
 
 func newDedup() *dedup { return &dedup{seen: map[string]bool{}} }
+
+// resolveOpts is the threaded path-resolution context carried through one
+// Expand / ResolveDirectives call. It is a plain struct (not Options) so the
+// recursive expandOnce → resolveDirective → globPaths chain does not re-pass
+// the full Options. See rebaseTarget for how baseDir/docDir are used.
+type resolveOpts struct {
+	baseDir string // cwd / project root: target of `pwd:` and `$PWD`
+	docDir  string // source document dir: default base for relative targets
+}
 
 // Expand parses doc, resolves every directive via io, and returns the expanded
 // document. Non-directive bytes are preserved verbatim (string splicing by
@@ -100,12 +121,16 @@ func Expand(ctx context.Context, io fsio.IO, doc string, opts Options) (string, 
 	if maxDepth <= 0 {
 		maxDepth = 8
 	}
+	ro := resolveOpts{baseDir: opts.BaseDir, docDir: opts.DocDir}
+	if ro.docDir == "" {
+		ro.docDir = opts.BaseDir
+	}
 	dd := newDedup()
 	for i := 0; i < maxDepth; i++ {
 		if err := ctx.Err(); err != nil {
 			return cur, err
 		}
-		out, found, err := expandOnce(ctx, io, cur, dd, maxDepth)
+		out, found, err := expandOnce(ctx, io, cur, dd, maxDepth, ro)
 		if err != nil {
 			return "", err
 		}
@@ -154,7 +179,7 @@ type substitution struct {
 
 // expandOnce resolves one layer of directives in doc. Returns found=false when
 // the document contains no directives (fixpoint reached).
-func expandOnce(ctx context.Context, io fsio.IO, doc string, dd *dedup, maxDepth int) (string, bool, error) {
+func expandOnce(ctx context.Context, io fsio.IO, doc string, dd *dedup, maxDepth int, ro resolveOpts) (string, bool, error) {
 	root := newMarkdown().Parser().Parse(text.NewReader([]byte(doc)))
 
 	var dirs []*grammar.Directive
@@ -177,7 +202,7 @@ func expandOnce(ctx context.Context, io fsio.IO, doc string, dd *dedup, maxDepth
 		subs = append(subs, substitution{
 			start:   d.Segment.Start,
 			stop:    d.Segment.Stop,
-			content: resolveDirective(ctx, io, d, dd, maxDepth),
+			content: resolveDirective(ctx, io, d, dd, maxDepth, ro),
 		})
 	}
 	return splice(doc, subs), true, nil
@@ -217,10 +242,10 @@ func newMarkdown() goldmark.Markdown {
 //   - first occurrence of a content id → full block (and content may recurse)
 //   - repeat id (no `!`) → REF, no further recursion
 //   - `!` → full block in an isolated dedup scope
-func resolveDirective(ctx context.Context, io fsio.IO, d *grammar.Directive, dd *dedup, maxDepth int) string {
+func resolveDirective(ctx context.Context, io fsio.IO, d *grammar.Directive, dd *dedup, maxDepth int, ro resolveOpts) string {
 	switch d.Mode {
 	case "FILE", "INJECT":
-		paths, err := globPaths(io, d)
+		paths, err := globPaths(io, d, ro)
 		if err != nil {
 			return fmt.Sprintf("<!-- jixomd: glob error %q: %v -->", d.Target, err)
 		}
@@ -230,11 +255,11 @@ func resolveDirective(ctx context.Context, io fsio.IO, d *grammar.Directive, dd 
 		sort.Strings(paths)
 		var b strings.Builder
 		for _, p := range paths {
-			b.WriteString(renderFile(ctx, io, d.Mode, p, d.Params, d.Bang, dd, maxDepth))
+			b.WriteString(renderFile(ctx, io, d.Mode, p, d.Params, d.Bang, dd, maxDepth, ro))
 		}
 		return b.String()
 	case "FILE_LIST":
-		paths, err := globPaths(io, d)
+		paths, err := globPaths(io, d, ro)
 		if err != nil {
 			return fmt.Sprintf("<!-- jixomd: glob error %q: %v -->", d.Target, err)
 		}
@@ -252,7 +277,7 @@ func resolveDirective(ctx context.Context, io fsio.IO, d *grammar.Directive, dd 
 		dd.seen[id] = true
 		return wrapFull(id, d.Mode, d.Target, renderFileList(paths, d.Params), d.Bang)
 	case "FILE_TREE":
-		paths, err := globPaths(io, d)
+		paths, err := globPaths(io, d, ro)
 		if err != nil {
 			return fmt.Sprintf("<!-- jixomd: glob error %q: %v -->", d.Target, err)
 		}
@@ -274,15 +299,91 @@ func resolveDirective(ctx context.Context, io fsio.IO, d *grammar.Directive, dd 
 }
 
 // globPaths resolves a directive's target via IO.Glob, forwarding the relevant
-// params (gitignore/ignore/ignoreFiles/dot) into GlobOptions.
-func globPaths(io fsio.IO, d *grammar.Directive) ([]string, error) {
+// params (gitignore/ignore/ignoreFiles/dot) into GlobOptions. The target is
+// first rebased to an absolute path per the jixomd path-resolution rules
+// (document-relative by default; `pwd:` / `$PWD` escape to baseDir).
+func globPaths(io fsio.IO, d *grammar.Directive, ro resolveOpts) ([]string, error) {
 	opts := fsio.GlobOptions{
 		Gitignore:   paramBool(d.Params, "gitignore", true),
 		Ignore:      paramStrings(d.Params, "ignore"),
 		IgnoreFiles: paramStrings(d.Params, "ignoreFiles"),
 		Dot:         paramBool(d.Params, "dot", false),
 	}
-	return io.Glob(d.Target, opts)
+	target := rebaseTarget(d.Target, ro.baseDir, ro.docDir)
+	return io.Glob(target, opts)
+}
+
+// pwdRe matches $PWD and ${PWD} only. Other $VAR names are intentionally NOT
+// expanded here — core is pure (SPEC §6: no os import), so only the baseDir-
+// bound $PWD is supported. General env expansion would belong in the CLI layer.
+var pwdRe = regexp.MustCompile(`\$\{?PWD\}?\b`)
+
+// rebaseTarget resolves a directive target to a path string ready for the
+// backend's Glob, applying the jixomd path-resolution rules (SPEC §1.3.1). The
+// steps, in order:
+//
+//  1. `$PWD` / `${PWD}` expansion → baseDir (NOT the process env, so a document
+//     behaves identically regardless of the caller's shell). Other `$VAR` names
+//     are left untouched — core is pure (SPEC §6: no os import); general env
+//     expansion is the CLI's job if ever needed.
+//  2. `pwd:` scheme: a leading `pwd:` prefix forces resolution against
+//     baseDir (cwd / --base). The prefix is stripped and the remainder is joined
+//     onto baseDir.
+//  3. Document-relative default: anything still relative is joined onto
+//     docDir (the source document's directory).
+//
+// Absolute paths pass through unchanged at each step. The joined result is NOT
+// cleaned — leading `..` segments are preserved so the backend can pick a
+// sensible walk root (the literal dir before the first `..`). When both baseDir
+// and docDir are empty (e.g. the in-memory test harness), the target is returned
+// verbatim so flat-keyed fake filesystemes keep working. Paths use forward
+// slashes (package `path`); the local backend converts as needed.
+func rebaseTarget(target, baseDir, docDir string) string {
+	// 1. $PWD / ${PWD} expansion (pure — bound to baseDir, not the OS env).
+	target = expandPWD(target, baseDir)
+
+	// 2. pwd: scheme → baseDir-relative.
+	if rest, ok := strings.CutPrefix(target, "pwd:"); ok {
+		return joinBase(rest, baseDir)
+	}
+
+	// 3. Absolute passes through; otherwise document-relative.
+	if path.IsAbs(target) {
+		return target // not cleaned: keep '..' for walk-root heuristics
+	}
+	if baseDir == "" && docDir == "" {
+		return target // pure/test harness: keep flat keys verbatim
+	}
+	return joinBase(target, docDir)
+}
+
+// expandPWD replaces $PWD / ${PWD} with baseDir. Other $VAR references are left
+// untouched (core stays pure — no os.Getenv). SPEC §1.3.1.
+func expandPWD(s, baseDir string) string {
+	return pwdRe.ReplaceAllString(s, baseDir)
+}
+
+// joinBase joins rel onto base, treating rel as already-absolute when it is.
+// Empty rel collapses to base. The result is NOT cleaned: leading `..` segments
+// are preserved (manual join) so the backend can choose a walk root at the
+// literal directory before the first `..` — cleaning would collapse
+// docDir/../x → docDirParent/x and lose the anchoring dir. The backend
+// normalizes both pattern and candidate before matching.
+func joinBase(rel, base string) string {
+	rel = strings.TrimSpace(rel)
+	if rel == "" {
+		return base
+	}
+	if path.IsAbs(rel) {
+		return rel
+	}
+	if base == "" {
+		return rel
+	}
+	if strings.HasSuffix(base, "/") {
+		return base + rel
+	}
+	return base + "/" + rel
 }
 
 // noFoundBlock produces the "no files found" output, honoring noFound.* params.
@@ -599,7 +700,7 @@ func renderTreeNode(b *strings.Builder, n *treeNode, prefix string) {
 }
 
 // renderFile produces the START/END-wrapped block for one file, applying dedup.
-func renderFile(ctx context.Context, io fsio.IO, mode, path string, params map[string][]string, bang bool, dd *dedup, maxDepth int) string {
+func renderFile(ctx context.Context, io fsio.IO, mode, path string, params map[string][]string, bang bool, dd *dedup, maxDepth int, ro resolveOpts) string {
 	id := stableID(mode + "\x00" + path)
 
 	// `!` forces full content in an isolated dedup scope (SPEC §3.3). Its nested
@@ -610,7 +711,7 @@ func renderFile(ctx context.Context, io fsio.IO, mode, path string, params map[s
 		content, _ := io.ReadFile(path)
 		processed := applyOutputShaping(mode, path, string(content), params)
 		if mode == "INJECT" {
-			processed = expandInjected(ctx, io, processed, nestedDD, maxDepth)
+			processed = expandInjected(ctx, io, processed, nestedDD, maxDepth, ro)
 		}
 		dd.seen[id] = true
 		return wrapFull(id, mode, path, processed, true)
@@ -628,22 +729,24 @@ func renderFile(ctx context.Context, io fsio.IO, mode, path string, params map[s
 	}
 	processed := applyOutputShaping(mode, path, string(content), params)
 	// INJECT content may itself contain directives → expand them in the same
-	// dedup scope so cross-file cycles still terminate.
+	// dedup scope so cross-file cycles terminate.
 	if mode == "INJECT" {
-		processed = expandInjected(ctx, io, processed, dd, maxDepth)
+		processed = expandInjected(ctx, io, processed, dd, maxDepth, ro)
 	}
 	return wrapFull(id, mode, path, processed, false)
 }
 
 // expandInjected recursively expands directives inside injected content,
 // sharing the parent dedup scope (so cycles terminate). Bounded by maxDepth.
-func expandInjected(ctx context.Context, io fsio.IO, content string, dd *dedup, maxDepth int) string {
+// Nested directives inherit the same path-resolution context (ro) as the
+// surrounding document.
+func expandInjected(ctx context.Context, io fsio.IO, content string, dd *dedup, maxDepth int, ro resolveOpts) string {
 	cur := content
 	for i := 0; i < maxDepth; i++ {
 		if err := ctx.Err(); err != nil {
 			return cur
 		}
-		out, found, err := expandOnce(ctx, io, cur, dd, maxDepth)
+		out, found, err := expandOnce(ctx, io, cur, dd, maxDepth, ro)
 		if err != nil || !found {
 			return out
 		}

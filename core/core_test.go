@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/bmatcuk/doublestar/v4"
-	fsio "github.com/jixoai/jixomd/io"
 	"github.com/jixoai/jixomd/core"
+	fsio "github.com/jixoai/jixomd/io"
 )
 
 // fakeIO is an in-memory fsio.IO. It proves the core is pure: tests run with no

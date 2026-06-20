@@ -59,7 +59,7 @@ Full documentation: https://github.com/jixoai/jixomd`,
 	// Doc-mode flags.
 	root.Flags().StringP("output", "o", "", "write output to this path")
 	root.Flags().String("out", "", "alias for --output")
-	root.Flags().String("base", "", "base directory for path resolution")
+	root.Flags().String("base", "", "base directory: what `pwd:`/`$PWD` resolve to (default cwd)")
 	root.Flags().Int("max-depth", 0, "max recursive injection depth (0 = default 8)")
 	root.Flags().BoolP("watch", "w", false, "watch for changes and re-expand")
 	root.Flags().Duration("watch-debounce", 200*time.Millisecond, "debounce window for --watch")
@@ -188,14 +188,18 @@ func (app *rootApp) runDoc(ctx context.Context, args []string) error {
 	}
 
 	// Non-watch: read input (file(s) or stdin).
-	base, doc, code := readDocInput(args, baseFlag, app.stdin, app.errw)
+	base, docDir, doc, code := readDocInput(args, baseFlag, app.stdin, app.errw)
 	if code != ExitOK {
 		app.exitCode = code
 		return nil
 	}
 
-	expanded, err := core.Expand(ctx, local.New(base), doc, core.Options{
+	// The backend walks from docDir (the document's directory) so reported paths
+	// are relative to the document — same as before. BaseDir is the cwd/--base,
+	// the target of `pwd:` / `$PWD`.
+	expanded, err := core.Expand(ctx, local.New(docDir), doc, core.Options{
 		BaseDir:  base,
+		DocDir:   docDir,
 		MaxDepth: maxDepth,
 	})
 	if err != nil {
@@ -207,8 +211,13 @@ func (app *rootApp) runDoc(ctx context.Context, args []string) error {
 	return writeDocOutput(output, expanded, app.out)
 }
 
-// readDocInput reads the document from file args or stdin.
-func readDocInput(args []string, baseFlag string, stdin io.Reader, errw io.Writer) (base, doc string, code int) {
+// readDocInput reads the document from file args or stdin. It returns:
+//   - base: the cwd / --base — what `pwd:` and `$PWD` resolve to, and the
+//     backend's Base.
+//   - docDir: the source document's directory — default base for relative
+//     targets (document-relative). Falls back to base for stdin / --base.
+//   - doc: the document text.
+func readDocInput(args []string, baseFlag string, stdin io.Reader, errw io.Writer) (base, docDir, doc string, code int) {
 	cwd, _ := filepath.Abs(".")
 	if baseFlag != "" {
 		cwd = baseFlag
@@ -217,9 +226,9 @@ func readDocInput(args []string, baseFlag string, stdin io.Reader, errw io.Write
 		b, err := io.ReadAll(stdin)
 		if err != nil {
 			fmt.Fprintln(errw, "jixomd: read stdin:", err)
-			return "", "", ExitUsage
+			return "", "", "", ExitUsage
 		}
-		return cwd, string(b), ExitOK
+		return cwd, cwd, string(b), ExitOK
 	}
 	path := args[0]
 	readPath := path
@@ -229,14 +238,16 @@ func readDocInput(args []string, baseFlag string, stdin io.Reader, errw io.Write
 	b, err := readFile(readPath)
 	if err != nil {
 		fmt.Fprintln(errw, "jixomd:", err)
-		return "", "", ExitUsage
+		return "", "", "", ExitUsage
 	}
-	if baseFlag == "" {
-		if abs, err := filepath.Abs(filepath.Dir(path)); err == nil {
-			cwd = abs
-		}
+	// Document directory: the source file's dir (document-relative). When
+	// --base is given explicitly, honor it as the doc dir too so an explicit
+	// base wins for both Base and DocDir.
+	dd := cwd
+	if abs, err := filepath.Abs(filepath.Dir(readPath)); err == nil {
+		dd = abs
 	}
-	return cwd, string(b), ExitOK
+	return cwd, dd, string(b), ExitOK
 }
 
 func writeDocOutput(output, doc string, out io.Writer) error {

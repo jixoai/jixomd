@@ -117,6 +117,21 @@ Agent / LLM 的 prompt 经常需要「把项目里的真实内容拼进来」—
 
 > 注:原 jixo2 的内置符号(`jixo:coder`/`jixo:pwd`/`jixo:datetime`/`jixo:memory`)**全部移除**,统一由 `@PLUGIN` 协议(可插拔)替代。
 
+#### 1.3.1 路径解析规则(Path resolution)
+
+相对 target 的**基准目录**遵循以下规则(在 core 的 `rebaseTarget` 中实现,顺序即优先级):
+
+1. **`$VAR` / `${VAR}` 展开**先于一切。`$PWD` 特殊处理 → 解析为 **BaseDir**(cwd / `--base`),**不读进程环境**,保证同一份文档在不同 shell 下行为一致。其它变量名回退到 `os.Getenv`。
+2. **`pwd:` scheme**:`target` 以 `pwd:` 开头时,剥去前缀,余下部分相对于 **BaseDir**(cwd / `--base`)解析。这是「强制走项目根 / cwd」的标准写法。
+3. **文档相对(默认)**:其余相对 target 相对于 **DocDir**(源 `.md` 文件所在目录)解析,对齐 Markdown/HTML 的惯例,使文档跨 cwd 可移植。
+4. **绝对路径**原样透传。
+
+> 例:在 `proj/sub/doc.md` 中,`[../sib.md](@FILE)` 指 `proj/sib.md`(文档的兄弟),而 `[pwd:top.md](@FILE)` 与 `[$PWD/top.md](@FILE)` 指 cwd 下的 `top.md`。
+>
+> 实现注:rebase 后的路径**不**做 `filepath.Clean`(保留 `..`),后端据此选择合理的遍历根(首个 `..` 之前的字面目录),再对 pattern 与候选路径统一 normalize 后匹配。`BaseDir == ""` 且 `DocDir == ""` 时(如内存测试)target 原样透传,以兼容 flat-key 的 fake 文件系统。
+>
+> CLI:`doc` 模式下 `local.New(DocDir)`(后端遍历根 = 文档目录,输出路径相对文档可读);`--watch` 下每个 input 各自 `DocDir = dirname(input)`、`BaseDir = cwd/--base`,因此 `[../*.md](@FILE)` 在两种模式下含义一致。
+
 ### 1.4 params(URL-search 语法 `?k=v&k=v`)
 
 两类参数:
@@ -390,7 +405,10 @@ watchLoop:
 ```
 
 - **memoization**:一次 build 内 `map[path]content` 去重重复读(作用域 = 单次 build)。
-- **watch 根**:默认 = `Options.BaseDir` 递归;`backend.accessedRoots()` 提供更精确的作用域(可选优化,大仓时缩小监听面)。
+- **watch 根 + `.gitignore`**:默认对 `Options.BaseDir` 递归监听,**遵守 `.gitignore`(根 + 嵌套,git 语义),并始终跳过 `.git`**。这避免了把 `node_modules`/`.git`/`dist` 等成千上万个目录加入 fsnotify 监听——在 macOS(kqueue,每目录 1 FD)上会迅速耗尽 FD 配额,导致每次防抖重跑的 `os.ReadFile` 报 `too many open files`、`.gen.md` 不再更新。
+  - 启动时打印一行汇总,如:`jixomd: watching 116 directories under . (skipped 4858 ignored by .gitignore, most by rule "target/")`。被跳过数 = 被忽略子树内**全部**目录(含根),主导规则按命中数取最大。
+  - 实时 `Create` 事件(新建目录)也走同一套 ignore 判定,避免运行期新生成的 `node_modules/...` 重新泄漏。
+- **路径基准**:`--watch` 下每个 input 的 `DocDir = dirname(input)`、`BaseDir = cwd/--base`,因此相对 target 的解析与 `doc` 模式一致(见 §1.3.1)。
 - core 仍 100% 纯:不 import fsnotify;watch 是 cli 对 core 的反复调用 + 一个包了访问记录的 backend。
 
 ### 5.3 与去重(§3)的关系

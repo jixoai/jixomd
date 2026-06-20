@@ -295,6 +295,8 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(stepOverwriteTwice, t.overwriteTwice)
 	ctx.Step(stepOutContains, t.outputContainsWithinStep)
 	ctx.Step(stepOutNotContains, t.outputNotContainsWithinStep)
+	ctx.Step(`^the watch log should contain "([^"]*)"$`, t.watchStderrShouldContain)
+	ctx.Step(`^the watch log should not contain "([^"]*)"$`, t.watchStderrShouldNotContain)
 
 	// Git-mode steps (SPEC §1.2 @GIT_FILE / @GIT_DIFF).
 	ctx.Step(`^a git repository initialized in the workspace with an initial commit$`, t.aGitRepositoryInitialized)

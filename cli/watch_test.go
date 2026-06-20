@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -15,10 +16,13 @@ import (
 type watchHandle struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	stderr *bytes.Buffer
 }
 
 // startWatchBackground runs `jixomd <file> --watch ...` in a goroutine against
 // the scenario workspace. It returns after a brief wait for the initial build.
+// The watch's stderr (status/summary logging) is captured on the handle for
+// assertions via stderrShouldContain.
 func (t *testCtx) startWatchBackground(cmd string) error {
 	args := shellSplit(cmd)
 	if len(args) > 0 && args[0] == "jixomd" {
@@ -26,13 +30,14 @@ func (t *testCtx) startWatchBackground(cmd string) error {
 	}
 	args = t.injectBase(args)
 
+	var errw bytes.Buffer
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = cli.RunContext(ctx, args, strings.NewReader(t.stdin), os.Stderr, os.Stderr)
+		_ = cli.RunContext(ctx, args, strings.NewReader(t.stdin), &errw, &errw)
 	}()
-	t.watch = &watchHandle{cancel: cancel, done: done}
+	t.watch = &watchHandle{cancel: cancel, done: done, stderr: &errw}
 	// Allow the initial build + fsnotify registration to settle.
 	time.Sleep(200 * time.Millisecond)
 	return nil
@@ -92,4 +97,27 @@ func (t *testCtx) outputNotContainsWithin(timeout time.Duration, filename, want 
 	}
 	b, _ := os.ReadFile(full)
 	return fmt.Errorf("output %q still contains %q after %v\ncontent:\n%s", filename, want, timeout, string(b))
+}
+
+// watchStderrShouldContain asserts the running watch's captured stderr (the
+// status/summary log, e.g. the gitignore-skip line) contains `want`.
+func (t *testCtx) watchStderrShouldContain(want string) error {
+	if t.watch == nil || t.watch.stderr == nil {
+		return fmt.Errorf("no background watch is running")
+	}
+	if !strings.Contains(t.watch.stderr.String(), want) {
+		return fmt.Errorf("watch stderr missing %q\nstderr:\n%s", want, t.watch.stderr.String())
+	}
+	return nil
+}
+
+// watchStderrShouldNotContain asserts the running watch's stderr omits `want`.
+func (t *testCtx) watchStderrShouldNotContain(want string) error {
+	if t.watch == nil || t.watch.stderr == nil {
+		return fmt.Errorf("no background watch is running")
+	}
+	if strings.Contains(t.watch.stderr.String(), want) {
+		return fmt.Errorf("watch stderr unexpectedly contains %q\nstderr:\n%s", want, t.watch.stderr.String())
+	}
+	return nil
 }

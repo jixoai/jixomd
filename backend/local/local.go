@@ -7,10 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
-	gitignore "github.com/sabhiram/go-gitignore"
 	fsio "github.com/jixoai/jixomd/io"
+	gitignore "github.com/sabhiram/go-gitignore"
 )
 
 // Local implements fsio.IO over a base directory.
@@ -43,6 +44,13 @@ func (l *Local) ReadFile(path string) ([]byte, error) {
 
 // Glob matches a pattern (with '**') under Base, honoring gitignore and the
 // Ignore / IgnoreFiles options (issue 004).
+//
+// The pattern may be relative (resolved against Base) or absolute. Core rebases
+// document-relative / `pwd:` / `$PWD` targets to absolute before calling, so an
+// absolute pattern can reach files outside Base (e.g. `[../*.md](@FILE)`). In
+// that case matching is done against each file's absolute path, but reported
+// paths stay relative to Base (falling back to the absolute path only when the
+// file is not under Base) so emitted blocks stay readable and deterministic.
 func (l *Local) Glob(pattern string, opts fsio.GlobOptions) ([]string, error) {
 	var ignores []*gitignore.GitIgnore
 	if opts.Gitignore {
@@ -63,14 +71,33 @@ func (l *Local) Glob(pattern string, opts fsio.GlobOptions) ([]string, error) {
 		}
 	}
 
+	// Absolute patterns can reach outside Base. Walk from the deepest existing
+	// ancestor of the pattern's directory to avoid scanning the whole world.
+	// The pattern is cleaned (collapsing `..`) so matching is well-defined; the
+	// walk root is the cleaned pattern's literal directory prefix, and each
+	// candidate is compared against the cleaned pattern.
+	walkRoot := l.Base
+	patAbs := filepath.IsAbs(pattern)
+	cleanPattern := pattern
+	if patAbs {
+		cleanPattern = filepath.Clean(pattern)
+		walkRoot = globRoot(cleanPattern)
+		if walkRoot == "" || !pathExists(walkRoot) {
+			walkRoot = l.Base
+		}
+	}
+
 	var matches []string
-	_ = filepath.WalkDir(l.Base, func(p string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(walkRoot, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		rel, _ := filepath.Rel(l.Base, p)
 		rel = filepath.ToSlash(rel)
-		if rel == "." {
+		// rel may start with ".." for files outside Base; that's fine for
+		// ignore/match but skip the walk-root's own "." entry only when it is
+		// literally Base.
+		if p == l.Base {
 			return nil
 		}
 		for _, gi := range ignores {
@@ -81,7 +108,12 @@ func (l *Local) Glob(pattern string, opts fsio.GlobOptions) ([]string, error) {
 				return nil
 			}
 		}
-		if !opts.Dot && len(rel) > 0 && rel[0] == '.' {
+		// Dot filter: hide dotfiles/dotdirs unless opts.Dot. Note ".." / "." are
+		// navigation entries, NOT hidden files, so they must not trigger this —
+		// otherwise walking a root outside Base (rel starts with "..") would
+		// SkipDir the root itself.
+		base := filepath.Base(rel)
+		if !opts.Dot && base != "." && base != ".." && len(base) > 0 && base[0] == '.' {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -90,13 +122,45 @@ func (l *Local) Glob(pattern string, opts fsio.GlobOptions) ([]string, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if ok, _ := doublestar.Match(pattern, rel); ok {
+		// Match: relative patterns compare against rel-to-Base; absolute
+		// patterns compare against the cleaned absolute path of the candidate.
+		candidate := rel
+		if patAbs {
+			candidate = filepath.Clean(filepath.ToSlash(p))
+		}
+		if ok, _ := doublestar.Match(cleanPattern, candidate); ok {
 			matches = append(matches, rel)
 		}
 		return nil
 	})
 	sort.Strings(matches)
 	return matches, nil
+}
+
+// pathExists reports whether p exists on disk (file or dir).
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// globRoot returns the longest literal directory prefix of a glob pattern —
+// the deepest existing ancestor to start walking from. For an absolute pattern
+// like /a/b/**/c.go it returns /a/b. Returns "" if no clean prefix exists.
+func globRoot(pattern string) string {
+	pattern = filepath.ToSlash(pattern)
+	// Strip everything from the first glob metacharacter onward.
+	cut := len(pattern)
+	for i, r := range pattern {
+		if r == '*' || r == '?' || r == '[' || r == '{' {
+			cut = i
+			break
+		}
+	}
+	dir := pattern[:cut]
+	if idx := strings.LastIndexByte(dir, '/'); idx >= 0 {
+		dir = dir[:idx]
+	}
+	return filepath.Clean(dir)
 }
 
 // Git returns a go-git-backed Git capability. If Base is not inside a git
