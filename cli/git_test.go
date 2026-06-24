@@ -43,7 +43,10 @@ func (t *testCtx) aGitRepositoryInitialized() error {
 	if err := t.runGit("add", ".gitkeep"); err != nil {
 		return err
 	}
-	return t.runGit("commit", "-q", "-m", "initial")
+	if err := t.runGit("commit", "-q", "-m", "initial"); err != nil {
+		return err
+	}
+	return t.runGit("branch", "-M", "main")
 }
 
 // aTrackedFileCommitted writes a file with the given content, stages and
@@ -66,4 +69,20 @@ func (t *testCtx) aTrackedFileCommitted(path, content string) error {
 func (t *testCtx) theFileIsModifiedTo(path, content string) error {
 	full := filepath.Join(t.workspace, path)
 	return os.WriteFile(full, []byte(content), 0o644)
+}
+
+func (t *testCtx) aGitBranchCheckedOutFromCurrentBranch(branch string) error {
+	return t.runGit("checkout", "-q", "-b", branch)
+}
+
+func (t *testCtx) iCheckOutGitBranch(branch string) error {
+	return t.runGit("checkout", "-q", branch)
+}
+
+func (t *testCtx) iStageFile(path string) error {
+	return t.runGit("add", path)
+}
+
+func (t *testCtx) iDeleteFile(path string) error {
+	return os.Remove(filepath.Join(t.workspace, path))
 }

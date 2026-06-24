@@ -25,6 +25,13 @@ jixomd file.md --watch                  # re-expand on change
 echo '[{"id":"d1","target":"src/**","directive":"FILE"}]' | jixomd resolve
 ```
 
+Git diff directives support branch/ref comparisons:
+
+```markdown
+[src/**](@GIT_DIFF?base=main)
+[src/**](@GIT_DIFF?compare=main..feature)
+```
+
 See the [main README](https://github.com/jixoai/jixomd#readme) for the full directive syntax.
 
 ## JavaScript API

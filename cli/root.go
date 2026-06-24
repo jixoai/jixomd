@@ -43,6 +43,8 @@ Directives are standard Markdown links with an @MODE URL:
   [src/**](@FILE_TREE)         tree view (├── └──)
   [app.ts](@GIT_FILE)          working-tree content + status
   [app.ts](@GIT_DIFF)          unified diff vs HEAD
+  [src/**](@GIT_DIFF?base=main)             diff working tree vs main
+  [src/**](@GIT_DIFF?compare=main..feature) diff two refs
 
 Full documentation: https://github.com/jixoai/jixomd`,
 		Args: cobra.ArbitraryArgs,

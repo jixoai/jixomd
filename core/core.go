@@ -414,17 +414,28 @@ func resolveGit(ctx context.Context, io fsio.IO, d *grammar.Directive, dd *dedup
 	staged := paramBool(d.Params, "staged", false)
 
 	if ref == "" {
-		// Working-tree view: list changed files matching the patterns.
+		if d.Mode == "GIT_DIFF" {
+			if compare := firstParam(d.Params, "compare"); compare != "" {
+				left, right, err := parseGitCompare(compare)
+				if err != nil {
+					return fmt.Sprintf("<!-- jixomd: git error: %v -->", err)
+				}
+				return resolveGitRangeDiff(left, right, patterns, git, d.Params, d.Bang, dd)
+			}
+			if base := firstParam(d.Params, "base"); base != "" {
+				return resolveGitBaseDiff(base, patterns, staged, git, d.Params, d.Bang, dd)
+			}
+		}
+
+		// Working-tree view: list changed files matching the selected source.
 		changed, err := git.ChangedFiles()
+		if staged {
+			changed, err = git.BaseChangedFiles("HEAD", true)
+		}
 		if err != nil {
 			return fmt.Sprintf("<!-- jixomd: git error: %v -->", err)
 		}
-		var matched []fsio.GitFile
-		for _, f := range changed {
-			if matchAny(patterns, f.Path) {
-				matched = append(matched, f)
-			}
-		}
+		matched := matchGitFiles(patterns, d.Params, changed)
 		if len(matched) == 0 {
 			return noFoundBlock(d)
 		}
@@ -445,15 +456,113 @@ func resolveGit(ctx context.Context, io fsio.IO, d *grammar.Directive, dd *dedup
 	}
 	var b strings.Builder
 	for _, p := range files {
+		if gitPathIgnored(d.Params, p) {
+			continue
+		}
 		f := fsio.GitFile{Path: p, Status: fsio.GitStatusModified}
 		b.WriteString(renderGitFile(ctx, io, d.Mode, f, ref, staged, git, d.Params, d.Bang, dd, maxDepth))
+	}
+	if b.Len() == 0 {
+		return noFoundBlock(d)
 	}
 	return b.String()
 }
 
+func resolveGitBaseDiff(base string, patterns []string, staged bool, git fsio.Git, params map[string][]string, bang bool, dd *dedup) string {
+	changed, err := git.BaseChangedFiles(base, staged)
+	if err != nil {
+		return fmt.Sprintf("<!-- jixomd: git error: %v -->", err)
+	}
+	matched := matchGitFiles(patterns, params, changed)
+	if len(matched) == 0 {
+		return noFoundBlock(&grammar.Directive{Target: strings.Join(patterns, ","), Params: params})
+	}
+	source := fmt.Sprintf("base=%s;staged=%t", base, staged)
+	var b strings.Builder
+	for _, f := range matched {
+		b.WriteString(renderGitDiffWith(gitDiffFunc(func(path string) (string, fsio.GitStatus, error) {
+			return git.BaseDiff(base, path, staged)
+		}), f, source, params, bang, dd))
+	}
+	return b.String()
+}
+
+func resolveGitRangeDiff(left, right string, patterns []string, git fsio.Git, params map[string][]string, bang bool, dd *dedup) string {
+	changed, err := git.RangeChangedFiles(left, right)
+	if err != nil {
+		return fmt.Sprintf("<!-- jixomd: git error: %v -->", err)
+	}
+	matched := matchGitFiles(patterns, params, changed)
+	if len(matched) == 0 {
+		return noFoundBlock(&grammar.Directive{Target: strings.Join(patterns, ","), Params: params})
+	}
+	source := fmt.Sprintf("compare=%s..%s", left, right)
+	var b strings.Builder
+	for _, f := range matched {
+		b.WriteString(renderGitDiffWith(gitDiffFunc(func(path string) (string, fsio.GitStatus, error) {
+			return git.RangeDiff(left, right, path)
+		}), f, source, params, bang, dd))
+	}
+	return b.String()
+}
+
+type gitDiffFunc func(path string) (string, fsio.GitStatus, error)
+
+func renderGitDiffWith(diff gitDiffFunc, f fsio.GitFile, source string, params map[string][]string, bang bool, dd *dedup) string {
+	id := stableID("GIT_DIFF" + "\x00" + f.Path + "\x00" + source)
+	if bang {
+		dd.seen[id] = true
+	} else if dd.seen[id] {
+		return wrapREF(id, "GIT_DIFF", f.Path)
+	}
+	dd.seen[id] = true
+
+	content, status, err := diff(f.Path)
+	if err != nil {
+		return fmt.Sprintf("<!-- jixomd: git error %q: %v -->", f.Path, err)
+	}
+	if status == "" {
+		status = f.Status
+	}
+	return wrapFull(id, "GIT_DIFF", f.Path, renderDiffContent(f.Path, status, content, params), bang)
+}
+
+func matchGitFiles(patterns []string, params map[string][]string, files []fsio.GitFile) []fsio.GitFile {
+	var matched []fsio.GitFile
+	for _, f := range files {
+		if matchAny(patterns, f.Path) && !gitPathIgnored(params, f.Path) {
+			matched = append(matched, f)
+		}
+	}
+	return matched
+}
+
+func gitPathIgnored(params map[string][]string, file string) bool {
+	for _, pattern := range paramStrings(params, "ignore") {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if strings.HasSuffix(pattern, "/") && strings.HasPrefix(file, pattern) {
+			return true
+		}
+		if !strings.Contains(pattern, "/") && globMatch(pattern, path.Base(file)) {
+			return true
+		}
+		if matchAny([]string{pattern}, file) {
+			return true
+		}
+	}
+	return false
+}
+
 // renderGitFile renders one file's git content/diff with a status-suffixed title.
 func renderGitFile(ctx context.Context, io fsio.IO, mode string, f fsio.GitFile, ref string, staged bool, git fsio.Git, params map[string][]string, bang bool, dd *dedup, maxDepth int) string {
-	id := stableID(mode + "\x00" + f.Path + "\x00" + ref)
+	source := ref
+	if source == "" {
+		source = fmt.Sprintf("working;staged=%t", staged)
+	}
+	id := stableID(mode + "\x00" + f.Path + "\x00" + source)
 	if bang {
 		dd.seen[id] = true
 	} else if dd.seen[id] {
@@ -491,18 +600,22 @@ func renderGitFile(ctx context.Context, io fsio.IO, mode string, f fsio.GitFile,
 	titleParams["filepath"] = []string{f.Path + " (" + string(status) + ")"}
 	processed := applyOutputShaping("FILE", f.Path, content, titleParams)
 	if mode == "GIT_DIFF" {
-		// Diff always uses diff fence regardless of extension.
-		lang := firstParam(params, "lang")
-		if lang == "" {
-			lang = "diff"
-		}
-		fence := "```"
-		if strings.Contains(content, fence) {
-			fence = "````"
-		}
-		processed = fmt.Sprintf("`%s (%s)`\n\n%s%s\n%s\n%s\n", f.Path, status, fence, lang, content, fence)
+		processed = renderDiffContent(f.Path, status, content, params)
 	}
 	return wrapFull(id, mode, f.Path, processed, bang)
+}
+
+func renderDiffContent(path string, status fsio.GitStatus, content string, params map[string][]string) string {
+	// Diff always uses diff fence regardless of extension.
+	lang := firstParam(params, "lang")
+	if lang == "" {
+		lang = "diff"
+	}
+	fence := "```"
+	if strings.Contains(content, fence) {
+		fence = "````"
+	}
+	return fmt.Sprintf("`%s (%s)`\n\n%s%s\n%s\n%s\n", path, status, fence, lang, content, fence)
 }
 
 // parseGitTarget splits "ref:path1,path2" into (ref, []pattern). A bare glob
@@ -532,6 +645,17 @@ func parseGitTarget(target string) (ref string, patterns []string) {
 		patterns = []string{"**"}
 	}
 	return ref, patterns
+}
+
+func parseGitCompare(compare string) (left, right string, err error) {
+	if strings.Contains(compare, "...") {
+		return "", "", fmt.Errorf("unsupported git compare %q: use left..right", compare)
+	}
+	left, right, ok := strings.Cut(compare, "..")
+	if !ok || left == "" || right == "" || strings.Contains(right, "..") {
+		return "", "", fmt.Errorf("malformed git compare %q: use left..right", compare)
+	}
+	return left, right, nil
 }
 
 // matchAny reports whether path matches any of the patterns. Pure (no

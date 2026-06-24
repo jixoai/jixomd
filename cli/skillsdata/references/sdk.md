@@ -52,7 +52,7 @@ import { resolve } from 'jixomd';
 
 const blocks = resolve([
   { id: 'd1', target: 'src/**', directive: 'FILE', params: { lang: 'ts' } },
-  { id: 'd2', target: 'app.ts', directive: 'GIT_DIFF' },
+  { id: 'd2', target: 'src/**', directive: 'GIT_DIFF', params: { compare: 'main..feature' } },
 ]);
 // → [{ id: 'd1', block: '<!-- jixomd:START ... -->...' }, ...]
 ```
@@ -65,7 +65,7 @@ interface Directive {
   target: string;           // file path, glob, or "commit:path"
   directive: string;        // FILE, INJECT, FILE_LIST, FILE_TREE, GIT_FILE, GIT_DIFF
   bang?: boolean;           // force full (skip dedup)
-  params?: Record<string, string | string[] | number | boolean>;
+  params?: Record<string, string | string[] | number | boolean>; // includes GIT_DIFF base/compare
 }
 ```
 

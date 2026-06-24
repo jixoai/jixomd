@@ -73,15 +73,19 @@ const blocks = resolve([{ id: 'd1', target: 'src/**', directive: 'FILE' }]);
 | `[glob](@FILE_LIST)` | Matched paths, one per line |
 | `[glob](@FILE_TREE)` | Tree view with `├──` `└──` connectors |
 | `[path](@GIT_FILE)` | Working-tree or commit content + status |
-| `[path](@GIT_DIFF)` | Unified diff vs HEAD |
+| `[path](@GIT_DIFF)` | Unified diff vs HEAD, `base`, or `compare` range |
 | `[path](@FILE!)` | `!` forces full copy (skips dedup) |
 | `[HEAD:src/*.go](@GIT_FILE)` | Commit-view via `commit:path` syntax |
+| `[src/**](@GIT_DIFF?base=main)` | Working tree diff vs `main` |
+| `[src/**](@GIT_DIFF?compare=main..feature)` | Ref range diff |
 
 Directives inside code blocks, inline code, or HTML comments are never
 expanded (parsed via a real Markdown AST, not a regex).
 
 **Shaping params** (query string): `?lang=python`, `?prefix=> `,
 `?ignore=node_modules/`, `?noFound.msg=empty`, `?map_ext_ts_lang=typescript`.
+Git diff params include `?base=main`, `?base=main&staged=true`, and
+`?compare=main..feature` (two-dot ranges only).
 
 ## Documentation
 

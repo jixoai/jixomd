@@ -60,6 +60,14 @@ type Git interface {
 	ChangedFiles() ([]GitFile, error)
 	WorkingContent(path string, staged bool) (string, GitStatus, error)
 	WorkingDiff(path string, staged bool) (string, GitStatus, error)
+	// BaseChangedFiles lists files changed from base to the worktree/index snapshot.
+	BaseChangedFiles(base string, staged bool) ([]GitFile, error)
+	// BaseDiff returns a single-file diff from base to the worktree/index snapshot.
+	BaseDiff(base, path string, staged bool) (string, GitStatus, error)
+	// RangeChangedFiles lists files changed from left ref to right ref.
+	RangeChangedFiles(left, right string) ([]GitFile, error)
+	// RangeDiff returns a single-file diff from left ref to right ref.
+	RangeDiff(left, right, path string) (string, GitStatus, error)
 	FilesAtCommit(ref string, globs []string) ([]string, error)
 	CommitContent(ref, path string) (string, GitStatus, error)
 	CommitDiff(ref, path string) (string, GitStatus, error)

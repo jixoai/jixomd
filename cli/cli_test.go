@@ -302,6 +302,10 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(`^a git repository initialized in the workspace with an initial commit$`, t.aGitRepositoryInitialized)
 	ctx.Step(`^a tracked file "([^"]+)" with content "([^"]+)" committed$`, t.aTrackedFileCommitted)
 	ctx.Step(`^the file "([^"]+)" is modified to "([^"]+)"$`, t.theFileIsModifiedTo)
+	ctx.Step(`^a git branch "([^"]+)" checked out from the current branch$`, t.aGitBranchCheckedOutFromCurrentBranch)
+	ctx.Step(`^I check out git branch "([^"]+)"$`, t.iCheckOutGitBranch)
+	ctx.Step(`^I stage file "([^"]+)"$`, t.iStageFile)
+	ctx.Step(`^I delete file "([^"]+)"$`, t.iDeleteFile)
 }
 
 // shellSplit is a minimal splitter for the command strings used in features.

@@ -104,7 +104,7 @@ Agent / LLM 的 prompt 经常需要「把项目里的真实内容拼进来」—
 | `@FILE_TREE` | 匹配文件的树视图 | 文件路径列表 | `├──/└──` 树形文本 |
 | `@FILE_LIST` | 仅文件路径清单 | 文件路径列表 | 路径逐行 |
 | `@GIT_FILE` | git 视角的文件**内容**(工作区改动 或 指定 commit) | `{path, content, status}` | 同 `@FILE`,标题带 `(status)` |
-| `@GIT_DIFF` | git 视角的 **diff** | `{path, diff, status}` | diff 围栏块,标题带 `(status)` |
+| `@GIT_DIFF` | git 视角的 **diff**(工作区/index vs HEAD/base、ref range、或指定 commit vs parent) | `{path, diff, status}` | diff 围栏块,标题带 `(status)` |
 
 未知 MODE → 输出 `<!-- jixomd: unknown mode <MODE> -->`(不报错,容错降级)。
 
@@ -145,7 +145,9 @@ Agent / LLM 的 prompt 经常需要「把项目里的真实内容拼进来」—
 | `ignoreFiles` | string\|string[] | 自定义 ignore 文件 |
 | `expandDirectories` | bool | `@FILE_TREE` 是否递归展开目录(默认 true) |
 | `dot` / `deep` / `onlyFiles` / `onlyDirectories` / `absolute` / `caseSensitiveMatch` / `globstar` / `braceExpansion` / `extglob` / `baseNameMatch` / `followSymbolicLinks` | bool/int | 透传 glob 选项 |
-| `staged` | bool | git 类:仅 staged(`@GIT_*` 工作区视角) |
+| `staged` | bool | git 类:仅 staged(`@GIT_*` 工作区视角);与 `@GIT_DIFF?base=<ref>` 组合时表示 index vs base |
+| `base` | string | `@GIT_DIFF` 工作区/index 比较基准;默认 `HEAD`,如 `[src/**](@GIT_DIFF?base=main)` |
+| `compare` | string | `@GIT_DIFF` ref range,格式 `left..right`,如 `[src/**](@GIT_DIFF?compare=main..feature)`;不支持 `...` merge-base 语义 |
 | `ignore`(git) | string\|string[] | git 文件列表的二次过滤 pattern |
 
 **(B) 输出塑形**(纯,在 MERGE 层生效):
@@ -180,9 +182,9 @@ Agent / LLM 的 prompt 经常需要「把项目里的真实内容拼进来」—
 └───────────────────────┬─────────────────────────────────┘
                         ▼ 依赖
 ┌─────────────────────────────────────────────────────────┐
-│ backend  local(os + doublestar + gitignore)             │
-│          (实现 IO 接口;Git/HTTP 暂返回 ErrUnsupported)  │
-│          [未来: go-git / wasm host-import / mindos VFS]  │
+│ backend  local(os + doublestar + gitignore + go-git)    │
+│          (实现 IO 接口;Git 可用,HTTP 返回 ErrUnsupported) │
+│          [未来: wasm host-import / mindos VFS]           │
 └───────────────────────┬─────────────────────────────────┘
                         ▼ 依赖
 ┌─────────────────────────────────────────────────────────┐
@@ -229,6 +231,10 @@ type Git interface {
     ChangedFiles() ([]GitFile, error)                                  // 工作区(含 index)改动 + status
     WorkingContent(path string, staged bool) (string, GitStatus, error)
     WorkingDiff(path string, staged bool) (string, GitStatus, error)   // vs HEAD
+    BaseChangedFiles(base string, staged bool) ([]GitFile, error)      // base -> worktree/index
+    BaseDiff(base, path string, staged bool) (string, GitStatus, error)
+    RangeChangedFiles(left, right string) ([]GitFile, error)           // left -> right
+    RangeDiff(left, right, path string) (string, GitStatus, error)
     FilesAtCommit(ref string, globs []string) ([]string, error)
     CommitContent(ref, path string) (string, GitStatus, error)         // git show ref:path
     CommitDiff(ref, path string) (string, GitStatus, error)            // 该 commit 引入的 diff(vs parent)
@@ -274,7 +280,7 @@ type HTTP interface {
 <!-- jixomd:END id=<id> -->
 ```
 
-- `id` = 内容稳定哈希(对 `@FILE`/`@GIT_FILE` 取 `mode+path(+ref)`;对 `@INJECT` 取内容 hash)。同一 `id` 即同一份内容。
+- `id` = 内容稳定哈希(对 `@FILE`/`@GIT_FILE` 取 `mode+path(+ref/working source)`;对 `@GIT_DIFF` 取 `mode+path+有效比较源`;对 `@INJECT` 取内容 hash)。同一 `id` 即同一份内容。
 - `@FILE_TREE`/`@FILE_LIST` 的 `id` 基于 `mode+pattern+排序后的文件集`。
 - 标记是 **jixomd 产出物**,晚于 §1.5 的注释剥离生成,故不会被剥掉。
 
@@ -510,9 +516,13 @@ jixomd/
 | `dedup.feature` | 5 | 首次全量/重复 REF、`!` 强制全量、batch 跨条目 dedup、自递归/互递归终止 |
 | `watch.feature` | 2 | 文件变更触发重跑、突发变更防抖合并 |
 | `modes.feature` | 6 | FILE_LIST / FILE_TREE、lang / map_ext / prefix / noFound 塑形 |
-| `git.feature` | 3 | @GIT_FILE(工作区内容+状态)、@GIT_DIFF、未改动文件 |
+| `git.feature` | 12 | @GIT_FILE(工作区内容+状态)、@GIT_DIFF、base/range/staged 比较、git ignore 过滤、删除文件、未改动文件 |
+| `regressions.feature` | 5 | review 回归:params、空 batch、dedup、ignore、commit glob |
+| `path-resolution.feature` | 5 | 文档相对、`..`、`pwd:`、`$PWD`、绝对路径 |
+| `watch-gitignore.feature` | 3 | watch 遵守 `.gitignore` 且跳过 ignored subtree |
+| `watch-multi.feature` | 2 | 多输入 watch、生成物排除 |
 
-共 **24 场景**全绿 + core 单测。
+共 **48 场景**全绿 + core 单测。
 
 ### 10.2 递归与去重的统一(SPEC §2.3 / §3 的澄清)
 
@@ -539,7 +549,7 @@ jixomd/
   io/           IO / Git / HTTP 接口 + ErrUnsupported(纯,仅接口)
   contract/     Directive / Block + packed 编解码(gzip|zstd + base64)
   backend/
-    local/      os + doublestar + gitignore 实现 IO(Git/HTTP = ErrUnsupported,TODO go-git)
+    local/      os + doublestar + gitignore + go-git 实现 IO(Git 可用,HTTP = ErrUnsupported)
   cli/          Run/RunContext + runDoc/runResolve + Watch + reorderFlags + signals
   cmd/jixomd/   main 薄壳
   features/     BDD 场景(.feature)
@@ -560,7 +570,7 @@ jixomd/
 | `@FILE_LIST` | core(纯,路径逐行) | IO.Glob |
 | `@FILE_TREE` | core(纯,├──/└── 树形) | IO.Glob |
 | `@GIT_FILE` | core + IO.Git | go-git(working + commit) |
-| `@GIT_DIFF` | core + IO.Git(内置 unified diff) | go-git |
+| `@GIT_DIFF` | core + IO.Git(内置 unified diff;支持 HEAD/base/range/commit-parent) | go-git |
 
 §1.4 输出塑形 params 已实现:`lang` / `ext` / `map_ext_<ext>_lang` / `prefix` / `filepath` / `noFound[.msg/.prefix/.suffix]`。glob 控制 params 已实现:`gitignore` / `ignore` / `ignoreFiles` / `dot`。
 

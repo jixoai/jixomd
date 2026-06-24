@@ -2,7 +2,9 @@ package local
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -75,6 +77,62 @@ func classifyStatus(s *git.FileStatus) fsio.GitStatus {
 	}
 }
 
+// BaseChangedFiles returns files changed between base and the current
+// worktree/index snapshot.
+func (g *localGit) BaseChangedFiles(base string, staged bool) ([]fsio.GitFile, error) {
+	baseContents, err := g.refContents(base)
+	if err != nil {
+		return nil, err
+	}
+	currentContents, err := g.currentContents(staged)
+	if err != nil {
+		return nil, err
+	}
+	return diffContentMaps(baseContents, currentContents), nil
+}
+
+// BaseDiff returns a unified diff for one file between base and the current
+// worktree/index snapshot.
+func (g *localGit) BaseDiff(base, path string, staged bool) (string, fsio.GitStatus, error) {
+	baseContent, baseExists, err := g.refContent(base, path)
+	if err != nil {
+		return "", "", err
+	}
+	currentContent, currentExists, err := g.currentContent(path, staged)
+	if err != nil {
+		return "", "", err
+	}
+	status := statusFromExistence(baseExists, currentExists)
+	return unifiedDiff(path, baseContent, currentContent), status, nil
+}
+
+// RangeChangedFiles returns files changed from left to right.
+func (g *localGit) RangeChangedFiles(left, right string) ([]fsio.GitFile, error) {
+	leftContents, err := g.refContents(left)
+	if err != nil {
+		return nil, err
+	}
+	rightContents, err := g.refContents(right)
+	if err != nil {
+		return nil, err
+	}
+	return diffContentMaps(leftContents, rightContents), nil
+}
+
+// RangeDiff returns a unified diff for one file from left to right.
+func (g *localGit) RangeDiff(left, right, path string) (string, fsio.GitStatus, error) {
+	leftContent, leftExists, err := g.refContent(left, path)
+	if err != nil {
+		return "", "", err
+	}
+	rightContent, rightExists, err := g.refContent(right, path)
+	if err != nil {
+		return "", "", err
+	}
+	status := statusFromExistence(leftExists, rightExists)
+	return unifiedDiff(path, leftContent, rightContent), status, nil
+}
+
 // WorkingContent returns the working-tree content of path (staged selects the
 // index version). Status is the file's change status.
 func (g *localGit) WorkingContent(path string, staged bool) (string, fsio.GitStatus, error) {
@@ -111,11 +169,17 @@ func (g *localGit) WorkingContent(path string, staged bool) (string, fsio.GitSta
 				return buf.String(), st, nil
 			}
 		}
+		if st == fsio.GitStatusDeleted {
+			return "", st, nil
+		}
 		return "", st, fmt.Errorf("not in index: %s", path)
 	}
 	// Working-tree file on disk.
 	b, err := readFileBytes(filepath.Join(g.base, path))
 	if err != nil {
+		if os.IsNotExist(err) && st == fsio.GitStatusDeleted {
+			return "", st, nil
+		}
 		return "", st, err
 	}
 	return string(b), st, nil
@@ -135,33 +199,18 @@ func (g *localGit) WorkingDiff(path string, staged bool) (string, fsio.GitStatus
 	}
 	st := classifyStatus(status[path])
 
-	// HEAD version of the file.
-	var headContent string
-	if headRef, herr := g.repo.Head(); herr == nil {
-		if headCommit, cerr := g.repo.CommitObject(headRef.Hash()); cerr == nil {
-			if tree, terr := headCommit.Tree(); terr == nil {
-				if f, ferr := tree.File(path); ferr == nil {
-					if c, ferr := f.Contents(); ferr == nil {
-						headContent = c
-					}
-				}
-			}
-		}
+	headContent, headExists, err := g.refContent("HEAD", path)
+	if err != nil {
+		headContent = ""
+		headExists = false
 	}
 
-	// Current version.
-	var curContent string
-	if staged {
-		curContent, _, err = g.WorkingContent(path, true)
-	} else {
-		b, rerr := readFileBytes(filepath.Join(g.base, path))
-		if rerr != nil {
-			return "", st, rerr
-		}
-		curContent = string(b)
-	}
+	curContent, curExists, err := g.currentContent(path, staged)
 	if err != nil {
 		return "", st, err
+	}
+	if st == "" {
+		st = statusFromExistence(headExists, curExists)
 	}
 
 	return unifiedDiff(path, headContent, curContent), st, nil
@@ -251,6 +300,173 @@ func (g *localGit) CommitDiff(ref, path string) (string, fsio.GitStatus, error) 
 		}
 	}
 	return unifiedDiff(path, parentContent, commitContent), fsio.GitStatusModified, nil
+}
+
+func (g *localGit) refContents(ref string) (map[string]string, error) {
+	hash, err := g.resolveRef(ref)
+	if err != nil {
+		return nil, err
+	}
+	commit, err := g.repo.CommitObject(hash)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	err = tree.Files().ForEach(func(f *object.File) error {
+		content, err := f.Contents()
+		if err != nil {
+			return err
+		}
+		out[f.Name] = content
+		return nil
+	})
+	return out, err
+}
+
+func (g *localGit) refContent(ref, path string) (string, bool, error) {
+	hash, err := g.resolveRef(ref)
+	if err != nil {
+		return "", false, err
+	}
+	commit, err := g.repo.CommitObject(hash)
+	if err != nil {
+		return "", false, err
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return "", false, err
+	}
+	file, err := tree.File(path)
+	if err != nil {
+		return "", false, nil
+	}
+	content, err := file.Contents()
+	if err != nil {
+		return "", false, err
+	}
+	return content, true, nil
+}
+
+func (g *localGit) currentContents(staged bool) (map[string]string, error) {
+	if staged {
+		return g.indexContents()
+	}
+	out, err := g.refContents("HEAD")
+	if err != nil {
+		out = map[string]string{}
+	}
+	wt, err := g.repo.Worktree()
+	if err != nil {
+		return nil, err
+	}
+	status, err := wt.Status()
+	if err != nil {
+		return nil, err
+	}
+	for path, s := range status {
+		if s.Worktree == git.Deleted || s.Staging == git.Deleted {
+			delete(out, path)
+			continue
+		}
+		content, exists, err := g.currentContent(path, false)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			delete(out, path)
+			continue
+		}
+		out[path] = content
+	}
+	return out, nil
+}
+
+func (g *localGit) currentContent(path string, staged bool) (string, bool, error) {
+	if staged {
+		contents, err := g.indexContents()
+		if err != nil {
+			return "", false, err
+		}
+		content, ok := contents[path]
+		return content, ok, nil
+	}
+	b, err := readFileBytes(filepath.Join(g.base, path))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return string(b), true, nil
+}
+
+func (g *localGit) indexContents() (map[string]string, error) {
+	idx, err := g.repo.Storer.Index()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, e := range idx.Entries {
+		blob, err := g.repo.BlobObject(e.Hash)
+		if err != nil {
+			return nil, err
+		}
+		r, err := blob.Reader()
+		if err != nil {
+			return nil, err
+		}
+		buf := new(strings.Builder)
+		_, readErr := readAll(buf, r)
+		closeErr := r.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		out[e.Name] = buf.String()
+	}
+	return out, nil
+}
+
+func diffContentMaps(from, to map[string]string) []fsio.GitFile {
+	paths := map[string]struct{}{}
+	for p := range from {
+		paths[p] = struct{}{}
+	}
+	for p := range to {
+		paths[p] = struct{}{}
+	}
+	ordered := make([]string, 0, len(paths))
+	for p := range paths {
+		ordered = append(ordered, p)
+	}
+	sort.Strings(ordered)
+	out := make([]fsio.GitFile, 0, len(ordered))
+	for _, p := range ordered {
+		fromContent, fromExists := from[p]
+		toContent, toExists := to[p]
+		if fromExists && toExists && fromContent == toContent {
+			continue
+		}
+		out = append(out, fsio.GitFile{Path: p, Status: statusFromExistence(fromExists, toExists)})
+	}
+	return out
+}
+
+func statusFromExistence(fromExists, toExists bool) fsio.GitStatus {
+	switch {
+	case !fromExists && toExists:
+		return fsio.GitStatusAdded
+	case fromExists && !toExists:
+		return fsio.GitStatusDeleted
+	default:
+		return fsio.GitStatusModified
+	}
 }
 
 // resolveRef resolves a ref string (HEAD, branch, tag, or hash) to a hash.

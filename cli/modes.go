@@ -51,8 +51,8 @@ func allModes() []ModeInfo {
 		{
 			Name:        "GIT_DIFF",
 			Syntax:      `[path](@GIT_DIFF)`,
-			Description: "Unified diff vs HEAD (or parent commit). Shows what changed.",
-			Example:     `[app.ts](@GIT_DIFF)`,
+			Description: "Unified diff vs HEAD, a base ref, a left..right range, or parent commit. Shows what changed.",
+			Example:     `[app.ts](@GIT_DIFF)  or  [src/**](@GIT_DIFF?compare=main..feature)`,
 		},
 	}
 }

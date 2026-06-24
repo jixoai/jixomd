@@ -51,7 +51,7 @@ echo '<packed>' | jixomd resolve --packed --algo zstd
 ```jsonc
 [
   {"id":"d1","target":"src/**","directive":"FILE","params":{"lang":"ts"}},
-  {"id":"d2","target":"HEAD:src/*.go","directive":"GIT_DIFF","bang":true}
+  {"id":"d2","target":"src/**","directive":"GIT_DIFF","params":{"compare":"main..feature"},"bang":true}
 ]
 ```
 
@@ -81,7 +81,18 @@ Dedup crosses items within one resolve call (same Expand scope).
 | `@FILE_LIST` | glob | matched paths, one per line |
 | `@FILE_TREE` | glob | tree view with ├── └── connectors |
 | `@GIT_FILE` | file or `commit:path` | working-tree or commit content + status |
-| `@GIT_DIFF` | file or `commit:path` | unified diff vs HEAD or parent commit |
+| `@GIT_DIFF` | file, `commit:path`, `base`, or `compare` | unified diff vs HEAD/base/range or parent commit |
+
+Git diff params:
+
+| Param | Effect |
+|---|---|
+| `staged=true` | Diff staged/index version instead of working tree |
+| `base=<ref>` | Diff working tree/index against ref |
+| `compare=left..right` | Diff two refs; two-dot range only |
+
+`compare` is only a `@GIT_DIFF` law. `@GIT_FILE` remains working-tree content
+or `commit:path` content.
 
 ## Markers
 
