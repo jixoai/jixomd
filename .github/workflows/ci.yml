@@ -48,7 +48,7 @@ jobs:
         run: pnpm install --frozen-lockfile=false
 
       - name: TypeScript type check
-        run: npx tsc --noEmit --project npm/jixomd/tsconfig.json
+        run: pnpm --dir npm/jixomd exec tsc --noEmit --project tsconfig.json
 
       - name: Build TypeScript package
         run: cd npm/jixomd && pnpm run build

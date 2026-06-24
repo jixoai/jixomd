@@ -54,10 +54,7 @@ Feature: Path resolution (SPEC § Path resolution)
     And stdout should contain "TOPLEVEL"
 
   Scenario: An absolute target is honored verbatim
-    And a document "sub/in.md" containing
-      """
-      [`/etc/hostname`](@FILE?noFound.msg=ABS-OK)
-      """
+    And a document "sub/in.md" containing an absolute FILE directive for "top.md"
     When I run `jixomd sub/in.md`
     Then the exit code should be 0
-    And stdout should contain "ABS-OK"
+    And stdout should contain "TOPLEVEL"

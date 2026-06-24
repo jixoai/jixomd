@@ -72,6 +72,12 @@ func (t *testCtx) aDocumentContaining(name, content string) error {
 	return os.WriteFile(full, []byte(content), 0o644)
 }
 
+func (t *testCtx) aDocumentContainingAbsoluteFileDirective(name, target string) error {
+	fullTarget := filepath.Join(t.workspace, target)
+	content := fmt.Sprintf("[`%s`](@FILE)\n", filepath.ToSlash(fullTarget))
+	return t.aDocumentContaining(name, content)
+}
+
 func (t *testCtx) iProvideOnStdin(content string) error {
 	t.stdin = content
 	return nil
@@ -275,6 +281,7 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 
 	ctx.Step(`^a workspace with files$`, t.aWorkspaceWithFiles)
 	ctx.Step(`^a document "([^"]+)" containing$`, t.aDocumentContaining)
+	ctx.Step(`^a document "([^"]+)" containing an absolute FILE directive for "([^"]+)"$`, t.aDocumentContainingAbsoluteFileDirective)
 	ctx.Step(`^I provide on stdin$`, t.iProvideOnStdin)
 	ctx.Step(`^I provide on stdin "([^"]*)"$`, t.iProvideOnStdin)
 	ctx.Step(stepIRun, t.run)
