@@ -1,6 +1,6 @@
 {
   "name": "@jixo/md-darwin-x64",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "description": "jixomd binary for darwin-x64",
   "license": "MIT",
   "os": [

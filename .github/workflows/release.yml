@@ -113,7 +113,7 @@ jobs:
           generate_release_notes: true
           files: jixomd_*
 
-  # ── Publish all 7 npm packages via pnpm workspace ──
+  # ── Publish all 7 npm packages via npm trusted publishing ──
   publish-npm:
     needs: build
     runs-on: ubuntu-latest
@@ -198,8 +198,10 @@ jobs:
               echo "  $name: skipped (private)"
               continue
             fi
+            if npm view "${name}@${ver}" version >/dev/null 2>&1; then
+              echo "  $name@$ver: already published, skipping"
+              continue
+            fi
             echo "  Publishing $name@$ver..."
-            (cd "$pkgdir" && npm publish --access public --provenance) || {
-              echo "  $name publish failed (may already exist), continuing..."
-            }
+            (cd "$pkgdir" && npm publish --access public --provenance)
           done

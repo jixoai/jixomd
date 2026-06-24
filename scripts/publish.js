@@ -17,7 +17,8 @@
 //   1. (optional) bumps all workspace packages to the given version
 //   2. cross-compiles 6 platform binaries into npm/jixomd-{slug}/
 //   3. builds the TypeScript SDK (tsdown + tsc)
-//   4. runs `pnpm publish -r` (skips the private root package automatically)
+//   4. rewrites workspace:* optional deps to the release version
+//   5. runs `npm publish` per package
 
 const fs = require('fs');
 const path = require('path');
@@ -90,6 +91,43 @@ function listWorkspacePackages() {
   return dirs.filter(d => fs.existsSync(path.join(d, 'package.json')));
 }
 
+function mainPackageJsonPath() {
+  return path.join(REPO_ROOT, 'npm', 'jixomd', 'package.json');
+}
+
+function readJSON(file) {
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function writeJSON(file, value) {
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/**
+ * npm publish reads package.json as-is. Workspace protocol deps are a pnpm
+ * source-of-truth convenience, not a registry contract, so rewrite the main
+ * package's platform optionalDependencies to the concrete release version
+ * while packing/publishing, then restore them afterward.
+ */
+function withRegistryOptionalDeps(version, fn) {
+  const pkgPath = mainPackageJsonPath();
+  const originalText = fs.readFileSync(pkgPath, 'utf8');
+  const pkg = JSON.parse(originalText);
+  if (pkg.optionalDependencies) {
+    for (const name of Object.keys(pkg.optionalDependencies)) {
+      if (name.startsWith('@jixo/md-')) {
+        pkg.optionalDependencies[name] = `^${version}`;
+      }
+    }
+    writeJSON(pkgPath, pkg);
+  }
+  try {
+    return fn();
+  } finally {
+    fs.writeFileSync(pkgPath, originalText);
+  }
+}
+
 function pnpm(args, opts) {
   opts = opts || {};
   const r = spawnSync('pnpm', args, {
@@ -118,6 +156,7 @@ function main() {
     console.log(`[publish] bumping all workspace packages to ${versionArg}`);
     pnpm(['-r', 'exec', '--', 'npm', 'version', versionArg, '--no-git-tag-version', '--allow-same-version']);
   }
+  const releaseVersion = readJSON(mainPackageJsonPath()).version;
 
   // ── Step 2: cross-compile platform binaries (incremental) ──
   console.log('[publish] building platform binaries...');
@@ -151,53 +190,63 @@ function main() {
   console.log('[publish] building TypeScript SDK (tsdown + tsc)...');
   pnpm(['run', 'build'], { cwd: path.join(REPO_ROOT, 'npm', 'jixomd') });
 
-  // ── Step 4: verify (dry-run exits here) ──
-  if (dryRun) {
-    console.log('[publish] dry-run: verifying packages pack...');
-    // Use npm pack --dry-run per package (pnpm's -r pack has version issues).
+  withRegistryOptionalDeps(releaseVersion, () => {
+    // ── Step 4: verify (dry-run exits here) ──
+    if (dryRun) {
+      console.log('[publish] dry-run: verifying packages pack...');
+      // Use npm pack --dry-run per package (pnpm's -r pack has version issues).
+      const pkgDirs = listWorkspacePackages();
+      for (const dir of pkgDirs) {
+        const name = require(path.join(dir, 'package.json')).name;
+        const r = spawnSync('npm', ['pack', '--dry-run'], { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
+        const ok = r.status === 0;
+        console.log(`  ${name}: ${ok ? 'pack OK' : 'pack FAIL'}`);
+        if (!ok) {
+          console.error(r.stderr);
+          throw new Error(`npm pack --dry-run failed for ${name}`);
+        }
+      }
+      console.log('[publish] dry-run complete — no packages published.');
+      return;
+    }
+
+    // ── Step 5: publish each package via npm publish ──
+    // We use `npm publish` (not `pnpm publish`) because:
+    //  - npm reads the auth token from ~/.npmrc reliably
+    //  - pnpm publish can trigger a web-OAuth QR-code flow that hangs in some
+    //    setups, especially with 2FA or scoped packages.
+    //  - npm publish reads package.json as-is, so workspace:* deps are
+    //    temporarily rewritten above to the registry release version.
+    console.log('[publish] publishing workspace packages...');
     const pkgDirs = listWorkspacePackages();
     for (const dir of pkgDirs) {
-      const name = require(path.join(dir, 'package.json')).name;
-      const r = spawnSync('npm', ['pack', '--dry-run'], { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
-      const ok = r.status === 0;
-      console.log(`  ${name}: ${ok ? 'pack OK' : 'pack FAIL'}`);
-      if (!ok) { console.error(r.stderr); process.exit(1); }
-    }
-    console.log('[publish] dry-run complete — no packages published.');
-    return;
-  }
-
-  // ── Step 5: publish each package via npm publish ──
-  // We use `npm publish` (not `pnpm publish`) because:
-  //  - npm reads the auth token from ~/.npmrc reliably
-  //  - pnpm publish can trigger a web-OAuth QR-code flow that hangs in some
-  //    setups, especially with 2FA or scoped packages.
-  //  - workspace:* is already rewritten by the version-bump step; npm publish
-  //    reads package.json as-is.
-  console.log('[publish] publishing workspace packages...');
-  const pkgDirs = listWorkspacePackages();
-  for (const dir of pkgDirs) {
-    const pkg = require(path.join(dir, 'package.json'));
-    // Skip the private root package.
-    if (pkg.private) {
-      console.log(`  ${pkg.name}: skipped (private)`);
-      continue;
-    }
-    console.log(`[publish] ${pkg.name}@${pkg.version}...`);
-    const npmArgs = ['publish', '--access', 'public'];
-    if (distTag) npmArgs.push('--tag', distTag);
-    // Use stdio: 'inherit' so npm's 2FA/OAuth OTP prompt can interact with
-    // the terminal directly. With 'pipe', the prompt is swallowed and npm
-    // hangs waiting for input that never arrives.
-    const r = spawnSync('npm', npmArgs, { cwd: dir, stdio: 'inherit' });
-    if (r.status !== 0) {
-      // Check if it's a "already published" error — those are non-fatal.
-      // We can't read stderr (inherit mode), so just warn and continue.
-      console.log(`  ⚠️  ${pkg.name} publish exited ${r.status} (may be already published or auth cancelled)`);
-    } else {
+      const pkg = require(path.join(dir, 'package.json'));
+      // Skip the private root package.
+      if (pkg.private) {
+        console.log(`  ${pkg.name}: skipped (private)`);
+        continue;
+      }
+      const view = spawnSync('npm', ['view', `${pkg.name}@${pkg.version}`, 'version'], {
+        cwd: dir,
+        stdio: 'ignore',
+      });
+      if (view.status === 0) {
+        console.log(`  ${pkg.name}@${pkg.version}: already published, skipping`);
+        continue;
+      }
+      console.log(`[publish] ${pkg.name}@${pkg.version}...`);
+      const npmArgs = ['publish', '--access', 'public'];
+      if (distTag) npmArgs.push('--tag', distTag);
+      // Use stdio: 'inherit' so npm's 2FA/OAuth OTP prompt can interact with
+      // the terminal directly. With 'pipe', the prompt is swallowed and npm
+      // hangs waiting for input that never arrives.
+      const r = spawnSync('npm', npmArgs, { cwd: dir, stdio: 'inherit' });
+      if (r.status !== 0) {
+        throw new Error(`npm publish failed for ${pkg.name}@${pkg.version}`);
+      }
       console.log(`  ✅ ${pkg.name} published`);
     }
-  }
+  });
   console.log('[publish] done.');
 }
 

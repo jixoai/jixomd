@@ -580,6 +580,6 @@ npm 包采用 **per-platform optionalDependencies** 分发(esbuild / swc / @biom
 
 - 主包 `jixomd`(unscoped):声明 6 个 `optionalDependencies`(`@jixo/md-{os}-{arch}`),npm 根据 `os`/`cpu` 字段自动只安装匹配平台的那一个。
 - 6 个平台子包:`@jixo/md-darwin-arm64`、`@jixo/md-darwin-x64`、`@jixo/md-linux-arm64`、`@jixo/md-linux-x64`、`@jixo/md-win-arm64`、`@jixo/md-win-x64`,各自含一个原生二进制。
-- pnpm workspace(`pnpm-workspace.yaml`)管理版本:子包间用 `workspace:*` 引用,`pnpm publish -r` 发布时自动重写为真实 semver。
+- pnpm workspace(`pnpm-workspace.yaml`)管理版本:源码期子包间用 `workspace:*` 引用;发布前由 `release.yml` / `scripts/publish.js` 临时重写为真实 semver,避免把 workspace 协议泄漏到 registry 包。
 - `index.js` 的 `binaryPath()` 解析顺序:`JIXOMD_BINARY_PATH`(开发覆盖)→ `require.resolve('@jixo/md-{slug}/jixomd')`(已安装的 optionalDep)→ 本地 workspace fallback。
-- GitHub Actions(`release.yml`):tag `v*` 触发 6 矩阵交叉编译(CGO disabled、`-trimpath -ldflags="-s -w"`)→ 编译进各自 `npm/jixomd-{slug}/` 目录 → `pnpm publish -r` 一次发布全部 7 个包(provenance)。GitHub Release 同时创建,作为直接下载的 fallback。
+- GitHub Actions(`release.yml`):tag `v*` 触发 6 矩阵交叉编译(CGO disabled、`-trimpath -ldflags="-s -w"`)→ 编译进各自 `npm/jixomd-{slug}/` 目录 → 逐包 `npm publish --provenance --access public` 发布全部 7 个包。已存在的 exact version 会跳过,其它 publish 错误会失败。GitHub Release 同时创建,作为直接下载的 fallback。
