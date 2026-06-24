@@ -58,7 +58,7 @@ jobs:
 
       - name: Build host binary for platform test
         run: |
-          SLUG=$(node -e "const{detect}=require('./npm/jixomd/dist/platform.js');const d=detect();console.log(d.slug)")
+          SLUG=$(node -e "const p=process.platform==='win32'?'win':process.platform;const a=process.arch==='x64'?'x64':process.arch;console.log(p+'-'+a)")
           go build -o "npm/jixomd-${SLUG}/jixomd" ./cmd/jixomd
 
       - name: Platform resolution test
