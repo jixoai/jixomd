@@ -63,7 +63,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           OUT="npm/jixomd-${{ matrix.slug }}/${{ matrix.bin }}"
-          go build -trimpath -ldflags="-s -w" -o "$OUT" ./cmd/jixomd
+          go build -trimpath -buildvcs=false -mod=readonly -gcflags=all=-l -ldflags="-s -w -buildid=" -o "$OUT" ./cmd/jixomd
           ls -lh "$OUT"
 
       - name: Smoke-test the binary (native arch only)

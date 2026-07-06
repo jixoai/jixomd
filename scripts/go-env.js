@@ -29,7 +29,7 @@ function goBin() {
 function goEnv() {
   const env = { ...process.env };
   delete env.GOROOT;
-  env.GOTOOLCHAIN = env.GOTOOLCHAIN || "local";
+  env.GOTOOLCHAIN = "local";
   return env;
 }
 

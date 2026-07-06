@@ -1,6 +1,6 @@
 {
   "name": "jixomd",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A pure Markdown expansion engine — resolve [target](@FILE) directives into real content.",
   "license": "MIT",
   "repository": {

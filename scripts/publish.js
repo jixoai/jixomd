@@ -174,7 +174,8 @@ function main() {
     process.stdout.write(`  ${p.slug}... `);
     const env = { ...goEnv(), GOOS: p.goos, GOARCH: p.goarch, CGO_ENABLED: '0' };
     const r = spawnSync('go', [
-      'build', '-trimpath', '-ldflags=-s -w',
+      'build', '-trimpath', '-buildvcs=false', '-mod=readonly',
+      '-gcflags=all=-l', '-ldflags=-s -w -buildid=',
       '-o', outPath, './cmd/jixomd',
     ], { cwd: REPO_ROOT, env, stdio: 'pipe', encoding: 'utf8' });
     if (r.status !== 0) {
