@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/jixoai/jixomd/backend/local"
 	"github.com/jixoai/jixomd/contract"
 	"github.com/jixoai/jixomd/core"
@@ -117,8 +116,9 @@ remote tool calls over size-limited channels.`,
 	// MCP subcommand (start MCP server).
 	root.AddCommand(newMCPCmd(stdin, out, errw))
 
-	// Customize help template with color + @MODE support.
-	customizeHelp(root)
+	// Customize help without Cobra templates: templates pull in a large
+	// reflection-heavy projection path for what is static command text.
+	customizeHelp(root, out)
 
 	// Override the help command to handle `jixomd help @FILE` / `@MODES`.
 	root.SetHelpCommand(&cobra.Command{
@@ -260,31 +260,41 @@ func writeDocOutput(output, doc string, out io.Writer) error {
 	return nil
 }
 
-// customizeHelp applies colored output to Cobra's help template and adds a
-// Modes section to the root command's help.
-func customizeHelp(cmd *cobra.Command) {
-	// fatih/color auto-disables when stdout is not a TTY.
-	bold := color.New(color.Bold).SprintFunc()
-	cyan := color.New(color.FgCyan).SprintFunc()
+// customizeHelp installs a direct help renderer. Cobra's SetHelpTemplate uses
+// text/template reflection for a static projection, which significantly bloats
+// the release binary.
+func customizeHelp(cmd *cobra.Command, out io.Writer) {
+	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		printCommandHelp(out, cmd)
+	})
+}
 
-	cobra.AddTemplateFunc("bold", bold)
-	cobra.AddTemplateFunc("cyan", cyan)
-
-	cmd.SetHelpTemplate(`{{bold .Name}} — {{.Short}}
-
-{{.Long}}
-
-Usage:
-  {{cyan .UseLine}}
-
-{{if .HasAvailableSubCommands}}Available Commands:{{range .Commands}}{{if not .Hidden}}
-  {{cyan .Name}}	{{.Short}}{{end}}{{end}}
-{{end}}{{if .HasAvailableLocalFlags}}Flags:
-{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}
-{{if .HasAvailableSubCommands}}
-Use "{{.CommandPath}} [command] --help" for more information about a command.
-Use "{{.CommandPath}} help @FILE" for help on a specific directive mode.{{end}}
-`)
+func printCommandHelp(out io.Writer, cmd *cobra.Command) {
+	fmt.Fprintf(out, "%s — %s\n\n", cmd.Name(), cmd.Short)
+	if cmd.Long != "" {
+		fmt.Fprintln(out, cmd.Long)
+		fmt.Fprintln(out)
+	}
+	fmt.Fprintln(out, "Usage:")
+	fmt.Fprintf(out, "  %s\n\n", cmd.UseLine())
+	if cmd.HasAvailableSubCommands() {
+		fmt.Fprintln(out, "Available Commands:")
+		for _, sub := range cmd.Commands() {
+			if sub.IsAvailableCommand() {
+				fmt.Fprintf(out, "  %-12s %s\n", sub.Name(), sub.Short)
+			}
+		}
+		fmt.Fprintln(out)
+	}
+	if cmd.HasAvailableLocalFlags() {
+		fmt.Fprintln(out, "Flags:")
+		fmt.Fprint(out, cmd.LocalFlags().FlagUsages())
+	}
+	if cmd.HasAvailableSubCommands() {
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "Use \"%s [command] --help\" for more information about a command.\n", cmd.CommandPath())
+		fmt.Fprintf(out, "Use \"%s help @FILE\" for help on a specific directive mode.\n", cmd.CommandPath())
+	}
 }
 
 // modeHelpHandler processes `jixomd help @FILE` etc.
